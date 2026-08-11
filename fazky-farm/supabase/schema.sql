@@ -236,8 +236,11 @@ ALTER TABLE feed_inventory ENABLE ROW LEVEL SECURITY;
 ALTER TABLE feed_inventory_log ENABLE ROW LEVEL SECURITY;
 
 -- RLS Policies
+-- (DROP IF EXISTS first — makes this script safe to re-run on an existing database)
 
 -- Workers policies
+DROP POLICY IF EXISTS workers_select ON workers;
+DROP POLICY IF EXISTS workers_all_admin ON workers;
 CREATE POLICY workers_select ON workers FOR SELECT USING (
   auth.uid() = auth_user_id OR my_role() IN ('admin', 'manager')
 );
@@ -246,6 +249,8 @@ CREATE POLICY workers_all_admin ON workers FOR ALL USING (
 );
 
 -- Pen Blocks policies
+DROP POLICY IF EXISTS pen_blocks_select ON pen_blocks;
+DROP POLICY IF EXISTS pen_blocks_all_admin ON pen_blocks;
 CREATE POLICY pen_blocks_select ON pen_blocks FOR SELECT USING (
   auth.role() = 'authenticated'
 );
@@ -254,6 +259,8 @@ CREATE POLICY pen_blocks_all_admin ON pen_blocks FOR ALL USING (
 );
 
 -- Pens policies
+DROP POLICY IF EXISTS pens_select ON pens;
+DROP POLICY IF EXISTS pens_all_admin ON pens;
 CREATE POLICY pens_select ON pens FOR SELECT USING (
   my_role() IN ('admin', 'manager') OR worker_id = my_worker_id()
 );
@@ -262,6 +269,8 @@ CREATE POLICY pens_all_admin ON pens FOR ALL USING (
 );
 
 -- Census Counts policies
+DROP POLICY IF EXISTS census_counts_select ON census_counts;
+DROP POLICY IF EXISTS census_counts_modify ON census_counts;
 CREATE POLICY census_counts_select ON census_counts FOR SELECT USING (
   my_role() IN ('admin', 'manager') OR pen_id IN (SELECT id FROM pens WHERE worker_id = my_worker_id())
 );
@@ -270,11 +279,14 @@ CREATE POLICY census_counts_modify ON census_counts FOR ALL USING (
 );
 
 -- General Census policies
+DROP POLICY IF EXISTS general_census_all ON general_census;
 CREATE POLICY general_census_all ON general_census FOR ALL USING (
   my_role() IN ('admin', 'manager')
 );
 
 -- Production Log policies
+DROP POLICY IF EXISTS production_log_select ON production_log;
+DROP POLICY IF EXISTS production_log_modify ON production_log;
 CREATE POLICY production_log_select ON production_log FOR SELECT USING (
   my_role() IN ('admin', 'manager') OR pen_id IN (SELECT id FROM pens WHERE worker_id = my_worker_id())
 );
@@ -283,11 +295,14 @@ CREATE POLICY production_log_modify ON production_log FOR ALL USING (
 );
 
 -- Sales Log policies
+DROP POLICY IF EXISTS sales_log_all ON sales_log;
 CREATE POLICY sales_log_all ON sales_log FOR ALL USING (
   my_role() IN ('admin', 'manager')
 );
 
 -- Egg Price Settings policies
+DROP POLICY IF EXISTS egg_price_settings_select ON egg_price_settings;
+DROP POLICY IF EXISTS egg_price_settings_all_admin ON egg_price_settings;
 CREATE POLICY egg_price_settings_select ON egg_price_settings FOR SELECT USING (
   auth.role() = 'authenticated'
 );
@@ -296,36 +311,44 @@ CREATE POLICY egg_price_settings_all_admin ON egg_price_settings FOR ALL USING (
 );
 
 -- Expenses Log policies
+DROP POLICY IF EXISTS expenses_log_all ON expenses_log;
 CREATE POLICY expenses_log_all ON expenses_log FOR ALL USING (
   my_role() IN ('admin', 'manager')
 );
 
 -- Maize Records policies
+DROP POLICY IF EXISTS maize_records_all ON maize_records;
 CREATE POLICY maize_records_all ON maize_records FOR ALL USING (
   my_role() IN ('admin', 'manager')
 );
 
 -- Feed Production policies
+DROP POLICY IF EXISTS feed_production_all ON feed_production;
 CREATE POLICY feed_production_all ON feed_production FOR ALL USING (
   my_role() IN ('admin', 'manager')
 );
 
 -- Loans policies
+DROP POLICY IF EXISTS loans_all ON loans;
 CREATE POLICY loans_all ON loans FOR ALL USING (
   my_role() = 'admin'
 );
 
 -- Loan Repayments policies
+DROP POLICY IF EXISTS loan_repayments_all ON loan_repayments;
 CREATE POLICY loan_repayments_all ON loan_repayments FOR ALL USING (
   my_role() = 'admin'
 );
 
 -- Off-pays policies
+DROP POLICY IF EXISTS off_pays_all ON off_pays;
 CREATE POLICY off_pays_all ON off_pays FOR ALL USING (
   my_role() = 'admin'
 );
 
 -- Feed Inventory policies
+DROP POLICY IF EXISTS feed_inventory_select ON feed_inventory;
+DROP POLICY IF EXISTS feed_inventory_all_admin ON feed_inventory;
 CREATE POLICY feed_inventory_select ON feed_inventory FOR SELECT USING (
   my_role() IN ('admin', 'manager')
 );
@@ -334,12 +357,15 @@ CREATE POLICY feed_inventory_all_admin ON feed_inventory FOR ALL USING (
 );
 
 -- Feed Inventory Log policies
+DROP POLICY IF EXISTS feed_inventory_log_select ON feed_inventory_log;
+DROP POLICY IF EXISTS feed_inventory_log_all_admin ON feed_inventory_log;
 CREATE POLICY feed_inventory_log_select ON feed_inventory_log FOR SELECT USING (
   my_role() IN ('admin', 'manager')
 );
 CREATE POLICY feed_inventory_log_all_admin ON feed_inventory_log FOR ALL USING (
   my_role() = 'admin'
 );
+
 
 
 -- =========================================================================
@@ -395,6 +421,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS production_mortality_trigger ON production_log;
 CREATE TRIGGER production_mortality_trigger
 AFTER INSERT OR UPDATE ON production_log
 FOR EACH ROW
@@ -438,6 +465,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS production_feed_deduction_trigger ON production_log;
 CREATE TRIGGER production_feed_deduction_trigger
 AFTER INSERT OR UPDATE ON production_log
 FOR EACH ROW
