@@ -41,65 +41,11 @@ To unlock multi-device sync and real staff logins, you need a Supabase project.
 2. Open [`schema.sql`](file:///c:/Users/user/Desktop/afams/work/Company's/Fazky/Fazky_farm/fazky-farm/supabase/schema.sql) from the project, copy all its contents, paste into the editor, and click **Run**.
    - This creates all 16 tables, Row Level Security (RLS) policies, and PostgreSQL triggers.
 
-### 2.3 — Add `updated_at` for Delta Sync ⚡ *(New in Phase 3)*
+### 2.3 — Delta Sync `updated_at` *(Built into schema.sql — no extra step needed)*
 
-The app's **Delta Sync** system only downloads rows that changed since the last sync — saving precious mobile data on the farm's 4G connection. For this to work, every table needs an `updated_at` column that auto-updates on any change.
+The [`schema.sql`](file:///c:/Users/user/Desktop/afams/work/Company's/Fazky/Fazky_farm/fazky-farm/supabase/schema.sql) file already includes the `updated_at` column and auto-update trigger for all 16 tables. Running the schema in Step 2.2 sets everything up automatically.
 
-Run this SQL block in the **SQL Editor** after the schema:
-
-```sql
--- Add updated_at to all core tables (safe to run multiple times)
-DO $$
-DECLARE
-  tbl TEXT;
-  tables TEXT[] := ARRAY[
-    'workers', 'pens', 'pen_blocks', 'production_log', 'census_counts',
-    'general_census', 'sales_log', 'egg_price_settings', 'expenses_log',
-    'maize_records', 'feed_production', 'loans', 'loan_repayments',
-    'off_pays', 'feed_inventory', 'feed_inventory_log'
-  ];
-BEGIN
-  FOREACH tbl IN ARRAY tables LOOP
-    EXECUTE format(
-      'ALTER TABLE %I ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()',
-      tbl
-    );
-  END LOOP;
-END $$;
-
--- Auto-update trigger function
-CREATE OR REPLACE FUNCTION set_updated_at()
-RETURNS TRIGGER AS $$
-BEGIN
-  NEW.updated_at = now();
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
--- Attach to every table (safe to run multiple times)
-DO $$
-DECLARE
-  tbl TEXT;
-  tables TEXT[] := ARRAY[
-    'workers', 'pens', 'pen_blocks', 'production_log', 'census_counts',
-    'general_census', 'sales_log', 'egg_price_settings', 'expenses_log',
-    'maize_records', 'feed_production', 'loans', 'loan_repayments',
-    'off_pays', 'feed_inventory', 'feed_inventory_log'
-  ];
-BEGIN
-  FOREACH tbl IN ARRAY tables LOOP
-    EXECUTE format(
-      'DROP TRIGGER IF EXISTS trg_%s_updated_at ON %I;
-       CREATE TRIGGER trg_%s_updated_at
-       BEFORE UPDATE ON %I
-       FOR EACH ROW EXECUTE FUNCTION set_updated_at();',
-      tbl, tbl, tbl, tbl
-    );
-  END LOOP;
-END $$;
-```
-
-> **Without this SQL:** The app still works fine but falls back to full table pulls on every sync (slow on mobile data). With it, syncs are near-instant after the first load.
+> **How it works:** Every time a row is updated in Supabase, the `set_updated_at()` trigger stamps the current time. The app then uses `.gte('updated_at', lastSyncedAt)` on all tables so only **new/changed rows** are downloaded — not the entire database — saving significant mobile data on the farm's 4G connection.
 
 ### 2.4 — Retrieve Your API Keys
 1. In Supabase, go to **Project Settings → API**.

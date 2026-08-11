@@ -19,7 +19,7 @@ import {
 import { exportToCSV, exportToExcel, parseImportFile, downloadCSVTemplate } from '../lib/csvExportImport';
 
 export default function Settings() {
-  const { data, insertRecord, updateRecord, bulkInsertRecords, flushQueue, queuedCount, isSyncing, isOnline } = useData();
+  const { data, insertRecord, updateRecord, bulkInsertRecords, flushQueue, forceFullSync, queuedCount, isSyncing, isOnline } = useData();
   const { user, role, worker, isSimulationMode } = useAuth();
 
   // Egg Price State
@@ -218,11 +218,12 @@ export default function Settings() {
 
               <div className="flex items-center justify-between text-xs font-semibold">
                 <span className="text-text-muted">Sync Architecture:</span>
-                <span className="text-primary font-bold">Parallel High-Speed</span>
+                <span className="text-primary font-bold">Delta Sync (Incremental)</span>
               </div>
             </div>
           </div>
 
+          <div className="space-y-2">
           <button
             onClick={flushQueue}
             disabled={isSyncing || !isOnline}
@@ -233,6 +234,21 @@ export default function Settings() {
             <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
             <span>{isSyncing ? 'Syncing Records...' : 'Trigger Fast Parallel Sync'}</span>
           </button>
+
+          <button
+            onClick={async () => {
+              if (window.confirm('Force a full re-download from Supabase? This clears all delta sync timestamps and re-pulls all data. Use only if your local data seems out of sync.')) {
+                await forceFullSync();
+                alert('✅ Full sync complete — all tables refreshed.');
+              }
+            }}
+            disabled={isSyncing || !isOnline}
+            className="w-full font-bold py-2.5 rounded-xl text-sm shadow-sm flex items-center justify-center gap-2 transition-all bg-white border border-border-farm text-dark-green hover:bg-red-50 hover:border-red-300 hover:text-red-700 disabled:opacity-40"
+          >
+            <Database className="w-4 h-4" />
+            <span>Force Full Sync (Reset Delta)</span>
+          </button>
+          </div>
         </div>
       </div>
 

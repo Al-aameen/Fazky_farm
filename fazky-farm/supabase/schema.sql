@@ -442,3 +442,105 @@ CREATE TRIGGER production_feed_deduction_trigger
 AFTER INSERT OR UPDATE ON production_log
 FOR EACH ROW
 EXECUTE FUNCTION handle_production_feed_deduction();
+
+
+-- =========================================================================
+-- DELTA SYNC: updated_at TRIGGERS (Phase 3)
+-- Required by the app's delta sync system — only rows newer than the
+-- last sync timestamp are downloaded on subsequent syncs, saving mobile data.
+-- =========================================================================
+
+-- Shared trigger function: stamps updated_at on every UPDATE
+CREATE OR REPLACE FUNCTION set_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Attach updated_at trigger to all 16 tables
+-- (census_counts already has the column declared above; all others get it via ALTER TABLE)
+
+ALTER TABLE workers           ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE pen_blocks        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE pens              ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+-- census_counts.updated_at already declared in CREATE TABLE above
+ALTER TABLE general_census    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE production_log    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE sales_log         ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE egg_price_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE expenses_log      ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE maize_records     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE feed_production   ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE loans             ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE loan_repayments   ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE off_pays          ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE feed_inventory    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE feed_inventory_log ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+-- Create triggers (DROP IF EXISTS first so this script is safe to re-run)
+DROP TRIGGER IF EXISTS trg_workers_updated_at            ON workers;
+DROP TRIGGER IF EXISTS trg_pen_blocks_updated_at         ON pen_blocks;
+DROP TRIGGER IF EXISTS trg_pens_updated_at               ON pens;
+DROP TRIGGER IF EXISTS trg_census_counts_updated_at      ON census_counts;
+DROP TRIGGER IF EXISTS trg_general_census_updated_at     ON general_census;
+DROP TRIGGER IF EXISTS trg_production_log_updated_at     ON production_log;
+DROP TRIGGER IF EXISTS trg_sales_log_updated_at          ON sales_log;
+DROP TRIGGER IF EXISTS trg_egg_price_settings_updated_at ON egg_price_settings;
+DROP TRIGGER IF EXISTS trg_expenses_log_updated_at       ON expenses_log;
+DROP TRIGGER IF EXISTS trg_maize_records_updated_at      ON maize_records;
+DROP TRIGGER IF EXISTS trg_feed_production_updated_at    ON feed_production;
+DROP TRIGGER IF EXISTS trg_loans_updated_at              ON loans;
+DROP TRIGGER IF EXISTS trg_loan_repayments_updated_at    ON loan_repayments;
+DROP TRIGGER IF EXISTS trg_off_pays_updated_at           ON off_pays;
+DROP TRIGGER IF EXISTS trg_feed_inventory_updated_at     ON feed_inventory;
+DROP TRIGGER IF EXISTS trg_feed_inventory_log_updated_at ON feed_inventory_log;
+
+CREATE TRIGGER trg_workers_updated_at
+  BEFORE UPDATE ON workers FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_pen_blocks_updated_at
+  BEFORE UPDATE ON pen_blocks FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_pens_updated_at
+  BEFORE UPDATE ON pens FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_census_counts_updated_at
+  BEFORE UPDATE ON census_counts FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_general_census_updated_at
+  BEFORE UPDATE ON general_census FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_production_log_updated_at
+  BEFORE UPDATE ON production_log FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_sales_log_updated_at
+  BEFORE UPDATE ON sales_log FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_egg_price_settings_updated_at
+  BEFORE UPDATE ON egg_price_settings FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_expenses_log_updated_at
+  BEFORE UPDATE ON expenses_log FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_maize_records_updated_at
+  BEFORE UPDATE ON maize_records FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_feed_production_updated_at
+  BEFORE UPDATE ON feed_production FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_loans_updated_at
+  BEFORE UPDATE ON loans FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_loan_repayments_updated_at
+  BEFORE UPDATE ON loan_repayments FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_off_pays_updated_at
+  BEFORE UPDATE ON off_pays FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_feed_inventory_updated_at
+  BEFORE UPDATE ON feed_inventory FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_feed_inventory_log_updated_at
+  BEFORE UPDATE ON feed_inventory_log FOR EACH ROW EXECUTE FUNCTION set_updated_at();
