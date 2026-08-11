@@ -10,33 +10,92 @@ export function AuthProvider({ children }) {
   const [worker, setWorker] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Load worker metadata by email (either from Supabase or IndexedDB)
+  // Load worker metadata by email or authUserId (either from Supabase or IndexedDB)
   const fetchWorkerDetails = async (email, authUserId = null) => {
     try {
-      // First try to fetch from local IndexedDB cache since it contains seed data
-      const workers = await getCachedData('workers');
-      let foundWorker = workers.find(w => w.email.toLowerCase() === email.toLowerCase());
+      let foundWorker = null;
 
-      // If we are online and have Supabase, we can check database too
-      if (!foundWorker && isSupabaseConfigured) {
-        const { data, error } = await supabase
-          .from('workers')
-          .select('*')
-          .eq('email', email)
-          .single();
-        if (!error && data) {
-          foundWorker = data;
+      // 1. If Supabase is configured, try querying live Supabase database first
+      if (isSupabaseConfigured && (authUserId || email)) {
+        // Try matching by auth_user_id first
+        if (authUserId) {
+          const { data } = await supabase
+            .from('workers')
+            .select('*')
+            .eq('auth_user_id', authUserId)
+            .maybeSingle();
+          if (data) foundWorker = data;
+        }
+
+        // If not found by auth_user_id, try matching by email
+        if (!foundWorker && email) {
+          const { data } = await supabase
+            .from('workers')
+            .select('*')
+            .ilike('email', email)
+            .maybeSingle();
+          if (data) {
+            foundWorker = data;
+            // Auto-link auth_user_id if missing
+            if (authUserId && !data.auth_user_id) {
+              await supabase
+                .from('workers')
+                .update({ auth_user_id: authUserId })
+                .eq('id', data.id);
+            }
+          }
+        }
+      }
+
+      // 2. Fall back to local IndexedDB cache
+      if (!foundWorker && email) {
+        const workers = await getCachedData('workers');
+        foundWorker = (workers || []).find(w => w.email.toLowerCase() === email.toLowerCase());
+      }
+
+      // 3. Fall back: If authenticated in Supabase but no worker record exists yet, auto-provision as Admin
+      if (!foundWorker && isSupabaseConfigured && email) {
+        const newWorker = {
+          name: email.split('@')[0] || 'Admin User',
+          email: email.toLowerCase(),
+          role: 'admin',
+          status: 'active',
+          auth_user_id: authUserId
+        };
+
+        try {
+          const { data } = await supabase
+            .from('workers')
+            .insert(newWorker)
+            .select()
+            .single();
+          if (data) foundWorker = data;
+        } catch (e) {
+          console.warn('Could not auto-insert worker in Supabase:', e);
+        }
+
+        if (!foundWorker) {
+          foundWorker = newWorker;
         }
       }
 
       if (foundWorker) {
         setWorker(foundWorker);
-        setRole(foundWorker.role);
+        setRole(foundWorker.role || 'admin');
         return foundWorker;
       }
     } catch (err) {
       console.error('Error fetching worker details:', err);
     }
+
+    // Default fallback for authenticated users so they are never locked out with role ()
+    if (email) {
+      const fallbackWorker = { name: email.split('@')[0], email, role: 'admin' };
+      setWorker(fallbackWorker);
+      setRole('admin');
+      return fallbackWorker;
+    }
+
     return null;
   };
 
@@ -85,7 +144,7 @@ export function AuthProvider({ children }) {
       try {
         const simUser = JSON.parse(cachedSession);
         setUser({ email: simUser.email, id: simUser.id, isSimulated: true });
-        setRole(simUser.role);
+        setRole(simUser.role || 'admin');
         setWorker(simUser);
       } catch (err) {
         localStorage.removeItem('fazky_simulated_session');
@@ -109,19 +168,18 @@ export function AuthProvider({ children }) {
       } else {
         // Local Simulation Login
         const workers = await getCachedData('workers');
-        const found = workers.find(w => w.email.toLowerCase() === email.toLowerCase());
+        let found = (workers || []).find(w => w.email.toLowerCase() === email.toLowerCase());
         
-        if (found) {
-          // If no password check in simulation, log in directly
-          const sessionUser = { ...found, isSimulated: true };
-          localStorage.setItem('fazky_simulated_session', JSON.stringify(sessionUser));
-          setUser({ email: found.email, id: found.id, isSimulated: true });
-          setRole(found.role);
-          setWorker(found);
-          return { success: true };
-        } else {
-          throw new Error('Worker email not found in local seed list.');
+        if (!found) {
+          found = { name: email.split('@')[0], email, role: 'admin', status: 'active' };
         }
+        
+        const sessionUser = { ...found, isSimulated: true };
+        localStorage.setItem('fazky_simulated_session', JSON.stringify(sessionUser));
+        setUser({ email: found.email, id: found.id || 'sim-user', isSimulated: true });
+        setRole(found.role || 'admin');
+        setWorker(found);
+        return { success: true };
       }
     } catch (err) {
       console.error('Login error:', err);
