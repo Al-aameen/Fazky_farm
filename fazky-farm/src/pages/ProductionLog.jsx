@@ -1,16 +1,20 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useData } from '../hooks/useData';
 import { useAuth } from '../context/AuthContext';
-import { Save, Check, ShieldAlert } from 'lucide-react';
+import DatePicker from '../components/DatePicker';
+import { exportToExcel, parseImportFile } from '../lib/csvExportImport';
+import { Save, Check, ShieldAlert, Download, Search, Upload } from 'lucide-react';
 
 export default function ProductionLog() {
-  const { data, insertRecord, updateRecord } = useData();
+  const { data, insertRecord, updateRecord, bulkInsertRecords } = useData();
   const { role, worker } = useAuth();
   
   const [selectedDate, setSelectedDate] = useState('2026-08-05'); // Default seed date
   const [productionData, setProductionData] = useState({}); // { penId: { morning_eggs, evening_eggs, morning_feed, evening_feed, mortality } }
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const importRef = useRef(null);
 
   // Filter pens by role
   const getVisiblePens = () => {
@@ -23,22 +27,29 @@ export default function ProductionLog() {
 
   const visiblePens = getVisiblePens();
 
-  // Group visible pens by block
+  // Workers reference for search by worker name
+  const workerMap = Object.fromEntries((data.workers || []).map(w => [w.id, w.name]));
+
+  // Group visible pens by block, filtered by search
   const getGroupedPens = () => {
     const blocks = data.pen_blocks || [];
+    const lc = searchTerm.toLowerCase();
     const grouped = [];
-    
+
     blocks.forEach(block => {
-      const pensInBlock = visiblePens.filter(p => p.pen_block_id === block.id);
+      const pensInBlock = visiblePens.filter(p => {
+        if (!lc) return p.pen_block_id === block.id;
+        const workerName = (workerMap[p.worker_id] || '').toLowerCase();
+        const penName = (p.name || '').toLowerCase();
+        const blockName = (block.name || '').toLowerCase();
+        return p.pen_block_id === block.id &&
+          (penName.includes(lc) || workerName.includes(lc) || blockName.includes(lc));
+      });
       if (pensInBlock.length > 0) {
-        grouped.push({
-          blockId: block.id,
-          blockName: block.name,
-          pens: pensInBlock
-        });
+        grouped.push({ blockId: block.id, blockName: block.name, pens: pensInBlock });
       }
     });
-    
+
     return grouped;
   };
 
@@ -201,16 +212,53 @@ export default function ProductionLog() {
         </div>
 
         <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-          {/* Date Picker */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-text-muted font-bold uppercase tracking-wide">Target Date:</span>
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="bg-bg-farm border border-border-farm rounded-lg px-3 py-1.5 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent font-semibold"
-            />
-          </div>
+          {/* Formatted DatePicker with Day Navigation */}
+          <DatePicker 
+            label="Target Date"
+            value={selectedDate}
+            onChange={setSelectedDate}
+          />
+
+          {/* Import CSV/Excel Button */}
+          <input
+            type="file"
+            ref={importRef}
+            className="hidden"
+            accept=".csv,.xlsx,.xls"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              try {
+                const rows = await parseImportFile(file);
+                const result = await bulkInsertRecords('production_log', rows);
+                alert(`✅ Imported ${result?.count ?? rows.length} production records successfully.`);
+              } catch (err) {
+                alert('❌ Import failed: ' + err.message);
+              } finally {
+                e.target.value = '';
+              }
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => importRef.current?.click()}
+            className="flex items-center gap-1.5 bg-white hover:bg-blue-50 text-dark-green font-bold px-3 py-1.5 rounded-lg text-xs border border-border-farm shadow-sm transition-all"
+            title="Import Production Log from CSV/Excel"
+          >
+            <Upload className="w-3.5 h-3.5 text-blue-600" />
+            <span className="hidden sm:inline">Import</span>
+          </button>
+
+          {/* Export Action Button */}
+          <button
+            type="button"
+            onClick={() => exportToExcel(`fazky_production_log_${selectedDate}`, 'Production', data.production_log || [])}
+            className="flex items-center gap-1.5 bg-white hover:bg-emerald-50 text-dark-green font-bold px-3 py-1.5 rounded-lg text-xs border border-border-farm shadow-sm transition-all"
+            title="Export Production Log to Excel"
+          >
+            <Download className="w-3.5 h-3.5 text-primary" />
+            <span className="hidden sm:inline">Export</span>
+          </button>
 
           {/* Save All Button */}
           <button
@@ -237,12 +285,37 @@ export default function ProductionLog() {
         </div>
       </div>
 
+      {/* Smart Search / Filter Bar */}
+      <div className="flex items-center gap-3 bg-white border border-border-farm rounded-xl px-4 py-2.5 shadow-sm">
+        <Search className="w-4 h-4 text-text-muted shrink-0" />
+        <input
+          type="search"
+          value={searchTerm}
+          onChange={e => setSearchTerm(e.target.value)}
+          placeholder="Filter by pen name, worker, or block…"
+          className="flex-1 bg-transparent text-sm font-sans focus:outline-none text-text-primary placeholder:text-text-muted"
+        />
+        {searchTerm && (
+          <span className="text-[10px] font-bold text-primary bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+            {groupedPens.reduce((n, g) => n + g.pens.length, 0)} result{groupedPens.reduce((n, g) => n + g.pens.length, 0) !== 1 ? 's' : ''}
+          </span>
+        )}
+      </div>
+
       {visiblePens.length === 0 ? (
         <div className="bg-white border border-border-farm rounded-2xl p-12 text-center shadow-sm">
           <ShieldAlert className="w-12 h-12 text-text-muted mx-auto mb-3" />
           <h4 className="font-serif text-lg text-dark-green font-bold">No assigned pens found</h4>
           <p className="text-xs text-text-muted mt-1 font-sans">
             Staff can only see their own assigned pens. Ask the Admin to assign pens to your profile.
+          </p>
+        </div>
+      ) : groupedPens.length === 0 ? (
+        <div className="bg-white border border-border-farm rounded-2xl p-12 text-center shadow-sm">
+          <Search className="w-12 h-12 text-text-muted mx-auto mb-3" />
+          <h4 className="font-serif text-lg text-dark-green font-bold">No matching pens</h4>
+          <p className="text-xs text-text-muted mt-1 font-sans">
+            No pens match "<strong>{searchTerm}</strong>". Try searching by worker name or pen block.
           </p>
         </div>
       ) : (
@@ -264,7 +337,7 @@ export default function ProductionLog() {
               <tbody className="divide-y divide-border-farm">
                 {groupedPens.map(group => {
                   const sub = getBlockSubtotals(group.pens);
-                  
+
                   return (
                     <React.Fragment key={group.blockId}>
                       {/* Section Header */}
@@ -281,7 +354,7 @@ export default function ProductionLog() {
                         const eEggs = Number(row.evening_eggs) || 0;
                         const mFeed = Number(row.morning_feed) || 0;
                         const eFeed = Number(row.evening_feed) || 0;
-                        
+
                         const isMortalityPositive = (Number(row.mortality) || 0) > 0;
 
                         return (
@@ -291,14 +364,16 @@ export default function ProductionLog() {
                               {pen.name}
                             </td>
 
-                            {/* Morning Eggs */}
+                            {/* Morning Eggs — onFocus auto-selects for dirty-hand tap-and-type */}
                             <td className="p-0 border-r border-border-farm">
                               <input
                                 type="text"
                                 inputMode="numeric"
                                 pattern="[0-9]*"
                                 value={row.morning_eggs ?? ''}
-                                onChange={(e) => handleCellChange(pen.id, 'morning_eggs', e.target.value)}
+                                onFocus={e => e.target.select()}
+                                onChange={e => handleCellChange(pen.id, 'morning_eggs', e.target.value)}
+                                style={{ minHeight: '44px' }}
                                 className="w-full text-center py-3.5 font-mono border-none bg-transparent text-text-primary focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none"
                               />
                             </td>
@@ -310,7 +385,9 @@ export default function ProductionLog() {
                                 inputMode="numeric"
                                 pattern="[0-9]*"
                                 value={row.evening_eggs ?? ''}
-                                onChange={(e) => handleCellChange(pen.id, 'evening_eggs', e.target.value)}
+                                onFocus={e => e.target.select()}
+                                onChange={e => handleCellChange(pen.id, 'evening_eggs', e.target.value)}
+                                style={{ minHeight: '44px' }}
                                 className="w-full text-center py-3.5 font-mono border-none bg-transparent text-text-primary focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none"
                               />
                             </td>
@@ -326,7 +403,9 @@ export default function ProductionLog() {
                                 type="text"
                                 inputMode="decimal"
                                 value={row.morning_feed ?? ''}
-                                onChange={(e) => handleCellChange(pen.id, 'morning_feed', e.target.value)}
+                                onFocus={e => e.target.select()}
+                                onChange={e => handleCellChange(pen.id, 'morning_feed', e.target.value)}
+                                style={{ minHeight: '44px' }}
                                 className="w-full text-center py-3.5 font-mono border-none bg-transparent text-text-primary focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none"
                               />
                             </td>
@@ -337,7 +416,9 @@ export default function ProductionLog() {
                                 type="text"
                                 inputMode="decimal"
                                 value={row.evening_feed ?? ''}
-                                onChange={(e) => handleCellChange(pen.id, 'evening_feed', e.target.value)}
+                                onFocus={e => e.target.select()}
+                                onChange={e => handleCellChange(pen.id, 'evening_feed', e.target.value)}
+                                style={{ minHeight: '44px' }}
                                 className="w-full text-center py-3.5 font-mono border-none bg-transparent text-text-primary focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none"
                               />
                             </td>
@@ -354,7 +435,9 @@ export default function ProductionLog() {
                                 inputMode="numeric"
                                 pattern="[0-9]*"
                                 value={row.mortality ?? ''}
-                                onChange={(e) => handleCellChange(pen.id, 'mortality', e.target.value)}
+                                onFocus={e => e.target.select()}
+                                onChange={e => handleCellChange(pen.id, 'mortality', e.target.value)}
+                                style={{ minHeight: '44px' }}
                                 className={`w-full text-center py-3.5 font-mono font-bold border-none bg-transparent focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none ${
                                   isMortalityPositive ? 'text-red-accent' : 'text-text-primary'
                                 }`}
@@ -398,7 +481,7 @@ export default function ProductionLog() {
                     {grandTotals.total_eggs.toLocaleString()}
                   </td>
                   <td className="p-3 text-center font-mono">{grandTotals.morning_feed.toLocaleString()}</td>
-                  <td className="p-3 text-center font-mono">{grandTotals.evening_feed.toLocaleString()}</td>
+                  <td className="p-3 text-center font-mono">{grandTotals.morning_feed.toLocaleString()}</td>
                   <td className="p-3 text-center font-mono font-black text-primary bg-green-150/20 text-base">
                     {grandTotals.total_feed.toLocaleString()}
                   </td>
@@ -412,3 +495,4 @@ export default function ProductionLog() {
     </div>
   );
 }
+

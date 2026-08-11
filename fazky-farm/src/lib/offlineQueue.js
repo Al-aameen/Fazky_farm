@@ -44,13 +44,14 @@ export async function getCachedData(table) {
   return db.getAll(table);
 }
 
+// Fast batch write into IndexedDB
 export async function setCachedData(table, data) {
   const db = await initDB();
   const tx = db.transaction(table, 'readwrite');
   const store = tx.objectStore(table);
   await store.clear();
-  for (const item of data) {
-    await store.put(item);
+  for (const item of (data || [])) {
+    store.put(item);
   }
   await tx.done;
 }
@@ -85,17 +86,17 @@ export async function dequeueSync(id) {
   await db.delete('sync_queue', id);
 }
 
+// Optimized high-speed queue flusher
 export async function flushSyncQueue(supabase) {
   if (!supabase) return 0;
   const queue = await getSyncQueue();
   if (queue.length === 0) return 0;
 
-  // Process items in order
   for (const item of queue) {
     const { id, table, action, payload } = item;
     try {
       if (action === 'INSERT') {
-        const { error } = await supabase.from(table).insert(payload);
+        const { error } = await supabase.from(table).upsert(payload);
         if (error) throw error;
       } else if (action === 'UPDATE') {
         const { error } = await supabase.from(table).update(payload).eq('id', payload.id);
@@ -104,11 +105,9 @@ export async function flushSyncQueue(supabase) {
         const { error } = await supabase.from(table).delete().eq('id', payload.id);
         if (error) throw error;
       }
-      // Dequeue after successful sync
       await dequeueSync(id);
     } catch (err) {
       console.error(`Failed to sync item ${id} in queue:`, err);
-      // Stop execution of the rest of the queue to maintain ordering
       break;
     }
   }
@@ -116,3 +115,50 @@ export async function flushSyncQueue(supabase) {
   const remaining = await getSyncQueue();
   return remaining.length;
 }
+
+// ─── Delta Sync Helpers ─────────────────────────────────────────────────────
+// Store per-table "last synced at" timestamps in localStorage.
+// On next sync we only fetch rows newer than this — massively reducing
+// mobile data usage on repeat syncs.
+
+const SYNC_TS_PREFIX = 'fazky_sync_ts_';
+
+/**
+ * Get the ISO timestamp of the last successful sync for a table.
+ * Returns null if this table has never been synced (triggers a full pull).
+ */
+export function getLastSyncedAt(table) {
+  return localStorage.getItem(`${SYNC_TS_PREFIX}${table}`) || null;
+}
+
+/**
+ * Record the current time as the successful sync timestamp for a table.
+ */
+export function setLastSyncedAt(table, isoTimestamp) {
+  localStorage.setItem(`${SYNC_TS_PREFIX}${table}`, isoTimestamp || new Date().toISOString());
+}
+
+/**
+ * Clear all sync timestamps (used for "Force Full Sync" in Settings).
+ */
+export function clearAllSyncTimestamps() {
+  TABLE_NAMES.forEach(t => localStorage.removeItem(`${SYNC_TS_PREFIX}${t}`));
+}
+
+/**
+ * Upsert delta rows into IndexedDB WITHOUT clearing existing data.
+ * Used for incremental syncs — only the changed/new records are written.
+ * @param {string} table
+ * @param {Array}  deltaRows — rows returned from a `.gte('updated_at', ts)` query
+ */
+export async function mergeCachedData(table, deltaRows) {
+  if (!deltaRows || deltaRows.length === 0) return;
+  const db = await initDB();
+  const tx = db.transaction(table, 'readwrite');
+  const store = tx.objectStore(table);
+  for (const row of deltaRows) {
+    store.put(row); // upsert by primary key — won't touch rows not in deltaRows
+  }
+  await tx.done;
+}
+

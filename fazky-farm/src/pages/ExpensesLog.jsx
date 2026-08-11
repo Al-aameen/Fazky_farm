@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { useData } from '../hooks/useData';
 import { useAuth } from '../context/AuthContext';
-import { Plus, Receipt, Calendar, CreditCard, ChevronRight } from 'lucide-react';
+import DatePicker from '../components/DatePicker';
+import { exportToExcel } from '../lib/csvExportImport';
+import { Plus, Receipt, Calendar, Download, ChevronRight } from 'lucide-react';
 
 export default function ExpensesLog() {
   const { data, insertRecord } = useData();
@@ -133,13 +135,25 @@ export default function ExpensesLog() {
             </select>
           </div>
 
-          <button
-            onClick={() => setShowAddExpense(true)}
-            className="flex items-center gap-1.5 bg-primary hover:bg-dark-green text-white font-bold px-4 py-2 rounded-lg text-xs shadow-md transition-all w-full sm:w-auto justify-center"
-          >
-            <Plus className="w-4 h-4" />
-            Log Farm Expense
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => exportToExcel(`fazky_expenses_${selectedMonth}`, 'Expenses', data.expenses_log || [])}
+              className="flex items-center gap-1.5 bg-white hover:bg-emerald-50 text-dark-green font-bold px-3 py-2 rounded-lg text-xs border border-border-farm shadow-sm transition-all"
+              title="Export Expenses to Excel"
+            >
+              <Download className="w-3.5 h-3.5 text-primary" />
+              <span>Export</span>
+            </button>
+
+            <button
+              onClick={() => setShowAddExpense(true)}
+              className="flex items-center gap-1.5 bg-primary hover:bg-dark-green text-white font-bold px-4 py-2 rounded-lg text-xs shadow-md transition-all w-full sm:w-auto justify-center"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Log Expense</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -204,15 +218,10 @@ export default function ExpensesLog() {
             </div>
             <form onSubmit={handleAddExpenseSubmit} className="p-6 space-y-4 font-sans text-xs">
               <div>
-                <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
-                  Expense Date
-                </label>
-                <input
-                  type="date"
-                  required
+                <DatePicker
+                  label="Expense Date"
                   value={expDate}
-                  onChange={(e) => setExpDate(e.target.value)}
-                  className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent font-semibold"
+                  onChange={setExpDate}
                 />
               </div>
 

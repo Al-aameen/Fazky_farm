@@ -1,16 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useData } from '../hooks/useData';
 import { useAuth } from '../context/AuthContext';
-import { Plus, Save, Edit3, Settings, ShieldAlert, Check } from 'lucide-react';
+import DatePicker from '../components/DatePicker';
+import { exportToExcel, parseImportFile } from '../lib/csvExportImport';
+import { Plus, Save, Edit3, Settings, ShieldAlert, Check, Download, Search, Upload } from 'lucide-react';
 
 export default function CensusMatrix() {
-  const { data, insertRecord, updateRecord, isOnline } = useData();
+  const { data, insertRecord, updateRecord, isOnline, bulkInsertRecords } = useData();
   const { role, worker } = useAuth();
   
   const [selectedDate, setSelectedDate] = useState('2026-08-05'); // Seed starting date
   const [gridData, setGridData] = useState({}); // Stores cell values: { 'penId-side-slot': count }
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const censusImportRef = useRef(null);
 
   // Modal states for Add Pen
   const [showAddPen, setShowAddPen] = useState(false);
@@ -43,22 +47,29 @@ export default function CensusMatrix() {
 
   const visiblePens = getVisiblePens();
 
-  // Group visible pens by pen block
+  // Worker name map for search
+  const workerMap = Object.fromEntries((data.workers || []).map(w => [w.id, w.name]));
+
+  // Group visible pens by pen block, filtered by search term
   const getGroupedPens = () => {
     const blocks = data.pen_blocks || [];
+    const lc = searchTerm.toLowerCase();
     const grouped = [];
-    
+
     blocks.forEach(block => {
-      const pensInBlock = visiblePens.filter(p => p.pen_block_id === block.id);
+      const pensInBlock = visiblePens.filter(p => {
+        if (!lc) return p.pen_block_id === block.id;
+        const workerName = (workerMap[p.worker_id] || '').toLowerCase();
+        const penName = (p.name || '').toLowerCase();
+        const blockName = (block.name || '').toLowerCase();
+        return p.pen_block_id === block.id &&
+          (penName.includes(lc) || workerName.includes(lc) || blockName.includes(lc));
+      });
       if (pensInBlock.length > 0) {
-        grouped.push({
-          blockId: block.id,
-          blockName: block.name,
-          pens: pensInBlock
-        });
+        grouped.push({ blockId: block.id, blockName: block.name, pens: pensInBlock });
       }
     });
-    
+
     return grouped;
   };
 
@@ -249,18 +260,56 @@ export default function CensusMatrix() {
         </div>
 
         <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-          {/* Date Selector */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-text-muted font-bold uppercase tracking-wide">Census Date:</span>
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="bg-bg-farm border border-border-farm rounded-lg px-3 py-1.5 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent font-semibold"
-            />
-          </div>
+          {/* Formatted DatePicker */}
+          <DatePicker
+            label="Census Date"
+            value={selectedDate}
+            onChange={setSelectedDate}
+          />
+
+          {/* Export Action Button */}
+          <button
+            type="button"
+            onClick={() => exportToExcel(`fazky_bird_census_${selectedDate}`, 'Census', data.census_counts || [])}
+            className="flex items-center gap-1.5 bg-white hover:bg-emerald-50 text-dark-green font-bold px-3 py-1.5 rounded-lg text-xs border border-border-farm shadow-sm transition-all"
+            title="Export Bird Census to Excel"
+          >
+            <Download className="w-3.5 h-3.5 text-primary" />
+            <span className="hidden sm:inline">Export</span>
+          </button>
+
+          {/* Import Census Button */}
+          <input
+            type="file"
+            ref={censusImportRef}
+            className="hidden"
+            accept=".csv,.xlsx,.xls"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              try {
+                const rows = await parseImportFile(file);
+                const result = await bulkInsertRecords('census_counts', rows);
+                alert(`✅ Imported ${result?.count ?? rows.length} census records successfully.`);
+              } catch (err) {
+                alert('❌ Import failed: ' + err.message);
+              } finally {
+                e.target.value = '';
+              }
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => censusImportRef.current?.click()}
+            className="flex items-center gap-1.5 bg-white hover:bg-blue-50 text-dark-green font-bold px-3 py-1.5 rounded-lg text-xs border border-border-farm shadow-sm transition-all"
+            title="Import Census Data from CSV/Excel"
+          >
+            <Upload className="w-3.5 h-3.5 text-blue-600" />
+            <span className="hidden sm:inline">Import</span>
+          </button>
 
           {/* Add Pen (Admin only) */}
+
           {role === 'admin' && (
             <button
               onClick={() => setShowAddPen(true)}
@@ -296,6 +345,23 @@ export default function CensusMatrix() {
         </div>
       </div>
 
+      {/* Smart Search / Filter Bar */}
+      <div className="flex items-center gap-3 bg-white border border-border-farm rounded-xl px-4 py-2.5 shadow-sm">
+        <Search className="w-4 h-4 text-text-muted shrink-0" />
+        <input
+          type="search"
+          value={searchTerm}
+          onChange={e => setSearchTerm(e.target.value)}
+          placeholder="Filter by pen name, worker, or block…"
+          className="flex-1 bg-transparent text-sm font-sans focus:outline-none text-text-primary placeholder:text-text-muted"
+        />
+        {searchTerm && (
+          <span className="text-[10px] font-bold text-primary bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+            {groupedPens.reduce((n, g) => n + g.pens.length, 0)} column{groupedPens.reduce((n, g) => n + g.pens.length, 0) !== 1 ? 's' : ''}
+          </span>
+        )}
+      </div>
+
       {/* Main Census Matrix Container */}
       {visiblePens.length === 0 ? (
         <div className="bg-white border border-border-farm rounded-2xl p-12 text-center shadow-sm">
@@ -303,6 +369,14 @@ export default function CensusMatrix() {
           <h4 className="font-serif text-lg text-dark-green font-bold">No assigned pens found</h4>
           <p className="text-xs text-text-muted mt-1 font-sans">
             Staff can only see their assigned pens. Ask the Admin to assign pens to your profile.
+          </p>
+        </div>
+      ) : groupedPens.length === 0 ? (
+        <div className="bg-white border border-border-farm rounded-2xl p-12 text-center shadow-sm">
+          <Search className="w-12 h-12 text-text-muted mx-auto mb-3" />
+          <h4 className="font-serif text-lg text-dark-green font-bold">No matching pens</h4>
+          <p className="text-xs text-text-muted mt-1 font-sans">
+            No pens match "<strong>{searchTerm}</strong>". Try a different search term.
           </p>
         </div>
       ) : (
@@ -395,7 +469,9 @@ export default function CensusMatrix() {
                             inputMode="numeric"
                             pattern="[0-9]*"
                             value={val}
+                            onFocus={e => e.target.select()}
                             onChange={(e) => handleCellChange(col.pen.id, col.side, slotNumber, e.target.value)}
+                            style={{ minHeight: '44px' }}
                             className="w-full text-center py-2.5 px-1 font-mono text-sm border-0 bg-transparent text-text-primary focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none transition-colors"
                           />
                         </td>

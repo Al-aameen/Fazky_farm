@@ -1,13 +1,16 @@
 import React, { useState } from 'react';
 import { useData } from '../hooks/useData';
 import { useAuth } from '../context/AuthContext';
+import DatePicker from '../components/DatePicker';
+import { exportToExcel } from '../lib/csvExportImport';
 import { 
   TrendingUp, 
   Coins, 
   User, 
   Plus, 
   DollarSign, 
-  History, 
+  History,
+  Download, 
   BookOpen, 
   Wallet,
   Settings,
@@ -307,16 +310,23 @@ export default function SalesLog() {
         <div className="flex items-center gap-3 w-full md:w-auto">
           {/* Target Date Picker */}
           {activeTab === 'today' && (
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-text-muted font-bold uppercase tracking-wider">Date:</span>
-              <input
-                type="date"
-                value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value)}
-                className="bg-white border border-border-farm rounded-lg px-2.5 py-1.5 text-xs font-sans font-semibold focus:outline-none"
-              />
-            </div>
+            <DatePicker
+              label="Date"
+              value={selectedDate}
+              onChange={setSelectedDate}
+            />
           )}
+
+          {/* Export Action Button */}
+          <button
+            type="button"
+            onClick={() => exportToExcel(`fazky_sales_log_${selectedDate}`, 'Sales', data.sales_log || [])}
+            className="flex items-center gap-1.5 bg-white hover:bg-emerald-50 text-dark-green font-bold px-3 py-1.5 rounded-lg text-xs border border-border-farm shadow-sm transition-all"
+            title="Export Sales Log to Excel"
+          >
+            <Download className="w-3.5 h-3.5 text-primary" />
+            <span className="hidden sm:inline">Export</span>
+          </button>
 
           {/* Pricing settings (Admin only) */}
           {role === 'admin' && (

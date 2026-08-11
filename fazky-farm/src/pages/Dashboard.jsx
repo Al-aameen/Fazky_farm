@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { useData } from '../hooks/useData';
 import { useAuth } from '../context/AuthContext';
+import DatePicker from '../components/DatePicker';
+import WeatherWidget from '../components/WeatherWidget';
 import { 
   TrendingUp, 
   TrendingDown, 
@@ -229,16 +231,15 @@ export default function Dashboard() {
           <Calendar className="w-5 h-5 text-primary" />
           <span className="font-serif text-dark-green font-bold text-lg">Dashboard Overview</span>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-text-muted font-bold uppercase tracking-wide">Target Date:</span>
-          <input
-            type="date"
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            className="bg-bg-farm border border-border-farm rounded-lg px-3 py-1.5 text-sm font-sans focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent font-semibold"
-          />
-        </div>
+        <DatePicker 
+          label="Target Date"
+          value={selectedDate}
+          onChange={setSelectedDate}
+        />
       </div>
+
+      {/* Farm Weather & Microclimate Telemetry */}
+      <WeatherWidget />
 
       {/* KPI Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

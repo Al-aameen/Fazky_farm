@@ -4,11 +4,15 @@ import { useOnlineStatus } from './useOnlineStatus';
 import {
   getCachedData,
   setCachedData,
+  mergeCachedData,
   putCachedItem,
   deleteCachedItem,
   enqueueSync,
   getSyncQueue,
   flushSyncQueue,
+  getLastSyncedAt,
+  setLastSyncedAt,
+  clearAllSyncTimestamps,
   TABLE_NAMES
 } from '../lib/offlineQueue';
 import historicalData from '../seed_data/historical_data.json';
@@ -171,26 +175,112 @@ export function DataProvider({ children }) {
     }
   }, [isOnline]);
 
-  // Pull records from Supabase and cache them
+  // Pull records from Supabase — uses delta sync to save mobile data.
+  // Each table records its last sync timestamp in localStorage.
+  // Subsequent syncs only fetch rows created/modified since then.
   const syncFromSupabase = async (currentLocalData) => {
     try {
-      console.log('Fetching fresh data from Supabase...');
+      const syncStartTime = new Date().toISOString();
       const freshData = { ...currentLocalData };
-      
-      for (const table of TABLE_NAMES) {
-        const { data: remoteData, error } = await supabase
-          .from(table)
-          .select('*');
-        
-        if (!error && remoteData) {
-          await setCachedData(table, remoteData);
-          freshData[table] = remoteData;
+
+      const fetchPromises = TABLE_NAMES.map(async (table) => {
+        try {
+          const lastSynced = getLastSyncedAt(table); // null on first ever sync
+
+          let query = supabase.from(table).select('*');
+
+          if (lastSynced) {
+            // Delta sync: only fetch rows updated since last sync
+            query = query.gte('updated_at', lastSynced);
+            console.log(`[DeltaSync] ${table}: fetching changes since ${lastSynced}`);
+          } else {
+            // First-time full pull — seeds the local IndexedDB cache
+            console.log(`[DeltaSync] ${table}: first sync, full pull`);
+          }
+
+          const { data: remoteData, error } = await query;
+
+          if (!error && remoteData) {
+            if (lastSynced) {
+              // Incremental: merge delta rows into existing cache
+              await mergeCachedData(table, remoteData);
+              // Merge into in-memory state (upsert by id)
+              const existing = freshData[table] || [];
+              const existingMap = Object.fromEntries(existing.map(r => [r.id, r]));
+              remoteData.forEach(r => { existingMap[r.id] = r; });
+              return { table, remoteData: Object.values(existingMap) };
+            } else {
+              // Full pull: replace cache entirely
+              await setCachedData(table, remoteData);
+              return { table, remoteData };
+            }
+          }
+        } catch (_e) {
+          // Silently ignore permission errors for tables this user can't access
         }
-      }
-      
+        return null;
+      });
+
+      const results = await Promise.all(fetchPromises);
+      results.forEach(res => {
+        if (res && res.remoteData) {
+          freshData[res.table] = res.remoteData;
+        }
+      });
+
+      // Stamp all tables with the sync start time (not end time, to avoid gaps)
+      TABLE_NAMES.forEach(t => setLastSyncedAt(t, syncStartTime));
+
       setData(freshData);
+      console.log('[DeltaSync] Sync complete.');
     } catch (err) {
       console.error('Failed to sync from Supabase:', err);
+    }
+  };
+
+  // Bulk Insert Records (for CSV/Excel imports)
+  const bulkInsertRecords = async (tableName, records) => {
+    if (!records || records.length === 0) return { success: true, count: 0 };
+    
+    try {
+      const preparedRecords = records.map(r => ({
+        id: r.id || `${tableName.slice(0, 3)}-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+        created_at: r.created_at || new Date().toISOString(),
+        ...r
+      }));
+
+      // Update local React state
+      setData(prev => {
+        const existing = prev[tableName] || [];
+        return { ...prev, [tableName]: [...preparedRecords, ...existing] };
+      });
+
+      // Update local IndexedDB cache
+      for (const item of preparedRecords) {
+        await putCachedItem(tableName, item);
+      }
+
+      // Sync online or queue offline
+      if (isOnline && isSupabaseConfigured) {
+        const { error } = await supabase.from(tableName).upsert(preparedRecords);
+        if (error) {
+          console.warn('Online bulk insert failed, queueing for retry:', error);
+          for (const item of preparedRecords) {
+            await enqueueSync(tableName, 'INSERT', item);
+          }
+        }
+      } else {
+        for (const item of preparedRecords) {
+          await enqueueSync(tableName, 'INSERT', item);
+        }
+      }
+
+      const queue = await getSyncQueue();
+      setQueuedCount(queue.length);
+      return { success: true, count: preparedRecords.length };
+    } catch (err) {
+      console.error('Bulk insert error:', err);
+      return { success: false, error: err.message };
     }
   };
 
@@ -488,6 +578,12 @@ export function DataProvider({ children }) {
     setData(prev => ({ ...prev, feed_inventory: updatedInventory }));
   };
 
+  // Force a full resync by clearing all delta timestamps then re-running loadData
+  const forceFullSync = async () => {
+    clearAllSyncTimestamps();
+    await loadData();
+  };
+
   return (
     <DataContext.Provider value={{
       data,
@@ -496,10 +592,12 @@ export function DataProvider({ children }) {
       isSyncing,
       queuedCount,
       refresh: loadData,
+      forceFullSync,
       flushQueue: triggerFlush,
       insertRecord,
       updateRecord,
-      deleteRecord
+      deleteRecord,
+      bulkInsertRecords
     }}>
       {children}
     </DataContext.Provider>

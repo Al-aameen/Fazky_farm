@@ -15,6 +15,10 @@ import Procurement from './pages/Procurement';
 import LoanLedger from './pages/LoanLedger';
 import Payroll from './pages/Payroll';
 import Workers from './pages/Workers';
+import Settings from './pages/Settings';
+import FeedWatch from './pages/FeedWatch';
+import FlockHealth from './pages/FlockHealth';
+import CustomerOrders from './pages/CustomerOrders';
 
 function AppContent() {
   const { user, role, loading } = useAuth();
@@ -102,6 +106,30 @@ function AppContent() {
         return (
           <ProtectedRoute allowedRoles={['admin']}>
             <Workers />
+          </ProtectedRoute>
+        );
+      case 'flockhealth':
+        return (
+          <ProtectedRoute allowedRoles={['admin', 'manager', 'staff']}>
+            <FlockHealth />
+          </ProtectedRoute>
+        );
+      case 'feedwatch':
+        return (
+          <ProtectedRoute allowedRoles={['admin', 'manager', 'staff']}>
+            <FeedWatch />
+          </ProtectedRoute>
+        );
+      case 'customerorders':
+        return (
+          <ProtectedRoute allowedRoles={['admin', 'manager']}>
+            <CustomerOrders />
+          </ProtectedRoute>
+        );
+      case 'settings':
+        return (
+          <ProtectedRoute allowedRoles={['admin', 'manager']}>
+            <Settings />
           </ProtectedRoute>
         );
       default:
