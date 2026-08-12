@@ -62,9 +62,11 @@ export default function Dashboard() {
       .reduce((sum, item) => sum + (item.bird_count || 0), 0);
   };
 
-  // 2. Total other livestock count (from general_census)
+  // 2. Total other livestock count (from general_census) — exclude corrupt nan rows
   const getOtherLivestockCount = () => {
-    return (data.general_census || []).reduce((sum, item) => sum + (item.total || 0), 0);
+    return (data.general_census || [])
+      .filter(item => item.category && item.category !== 'nan' && item.category !== 'NaN' && item.category !== 'undefined')
+      .reduce((sum, item) => sum + (item.total || 0), 0);
   };
 
   // Helper: Get Egg Price for a date
@@ -229,10 +231,15 @@ export default function Dashboard() {
       <div className="flex items-center justify-between bg-white border border-border-farm rounded-2xl p-4 shadow-sm">
         <div className="flex items-center gap-2">
           <Calendar className="w-5 h-5 text-primary" />
-          <span className="font-serif text-dark-green font-bold text-lg">Dashboard Overview</span>
+          <div>
+            <span className="font-serif text-dark-green font-bold text-lg">Dashboard Overview</span>
+            <div className="text-[10px] text-text-muted font-sans mt-0.5">
+              Today: {new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+            </div>
+          </div>
         </div>
         <DatePicker 
-          label="Target Date"
+          label="Record Date"
           value={selectedDate}
           onChange={setSelectedDate}
         />
@@ -279,8 +286,11 @@ export default function Dashboard() {
                   <TrendingDown className="w-3 h-3" /> -{eggStats.percent}% vs yesterday
                 </span>
               )}
-              {eggStats.trend === 'flat' && (
-                <span className="text-text-muted bg-bg-farm px-1.5 py-0.5 rounded border border-border-farm">No change</span>
+              {eggStats.trend === 'flat' && eggStats.today === 0 && eggStats.yesterday === 0 && (
+                <span className="text-text-muted bg-bg-farm px-1.5 py-0.5 rounded border border-border-farm">No data yet today</span>
+              )}
+              {eggStats.trend === 'flat' && (eggStats.today > 0 || eggStats.yesterday > 0) && (
+                <span className="text-text-muted bg-bg-farm px-1.5 py-0.5 rounded border border-border-farm">No change vs yesterday</span>
               )}
             </div>
           </div>

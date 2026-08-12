@@ -214,7 +214,7 @@ export default function ProductionLog() {
         <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
           {/* Formatted DatePicker with Day Navigation */}
           <DatePicker 
-            label="Target Date"
+            label="Record Date"
             value={selectedDate}
             onChange={setSelectedDate}
           />

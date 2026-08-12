@@ -1,11 +1,13 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useData } from '../hooks/useData';
 import { useAuth } from '../context/AuthContext';
-import { Plus, Hammer, Tractor, Boxes, History, ChevronRight, AlertTriangle } from 'lucide-react';
+import { Plus, Hammer, Tractor, Boxes, History, ChevronRight, AlertTriangle, Download, Upload } from 'lucide-react';
+import { exportToExcel, parseImportFile } from '../lib/csvExportImport';
 
 export default function Procurement() {
-  const { data, insertRecord, updateRecord } = useData();
+  const { data, insertRecord, updateRecord, bulkInsertRecords } = useData();
   const { role } = useAuth();
+  const maizeImportRef = useRef(null);
   
   const [activeTab, setActiveTab] = useState('maize'); // 'maize', 'production', 'inventory'
   const [selectedInventoryItem, setSelectedInventoryItem] = useState(null); // id of feed_inventory
@@ -204,15 +206,55 @@ export default function Procurement() {
           </button>
         </div>
 
-        <div>
+        <div className="flex items-center gap-2">
           {activeTab === 'maize' && (
-            <button
-              onClick={() => setShowAddMaize(true)}
-              className="flex items-center gap-1.5 bg-primary hover:bg-dark-green text-white font-bold px-4 py-2 rounded-lg text-xs shadow-md transition-all"
-            >
-              <Plus className="w-4 h-4" />
-              Log Maize Purchase
-            </button>
+            <>
+              {/* Import CSV/Excel */}
+              <input
+                type="file"
+                ref={maizeImportRef}
+                className="hidden"
+                accept=".csv,.xlsx,.xls"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  try {
+                    const rows = await parseImportFile(file);
+                    const result = await bulkInsertRecords('maize_records', rows);
+                    alert(`✅ Imported ${result?.count ?? rows.length} maize records successfully.`);
+                  } catch (err) {
+                    alert('❌ Import failed: ' + err.message);
+                  } finally {
+                    e.target.value = '';
+                  }
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => maizeImportRef.current?.click()}
+                className="flex items-center gap-1.5 bg-white hover:bg-blue-50 text-dark-green font-bold px-3 py-2 rounded-lg text-xs border border-border-farm shadow-sm transition-all"
+                title="Import Maize Records from CSV or Excel file"
+              >
+                <Upload className="w-3.5 h-3.5 text-blue-600" />
+                <span className="hidden sm:inline">Import CSV/Excel</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => exportToExcel('fazky_maize_records', 'Maize', data.maize_records || [])}
+                className="flex items-center gap-1.5 bg-white hover:bg-emerald-50 text-dark-green font-bold px-3 py-2 rounded-lg text-xs border border-border-farm shadow-sm transition-all"
+                title="Export Maize Records to Excel (.xlsx)"
+              >
+                <Download className="w-3.5 h-3.5 text-primary" />
+                <span className="hidden sm:inline">Export</span>
+              </button>
+              <button
+                onClick={() => setShowAddMaize(true)}
+                className="flex items-center gap-1.5 bg-primary hover:bg-dark-green text-white font-bold px-4 py-2 rounded-lg text-xs shadow-md transition-all"
+              >
+                <Plus className="w-4 h-4" />
+                Log Maize Purchase
+              </button>
+            </>
           )}
 
           {activeTab === 'production' && (

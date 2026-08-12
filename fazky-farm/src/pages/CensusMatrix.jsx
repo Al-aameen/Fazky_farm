@@ -8,7 +8,7 @@ import { Plus, Save, Edit3, Settings, ShieldAlert, Check, Download, Search, Uplo
 export default function CensusMatrix() {
   const { data, insertRecord, updateRecord, isOnline, bulkInsertRecords } = useData();
   const { role, worker } = useAuth();
-  
+
   const [selectedDate, setSelectedDate] = useState('2026-08-05'); // Seed starting date
   const [gridData, setGridData] = useState({}); // Stores cell values: { 'penId-side-slot': count }
   const [saving, setSaving] = useState(false);
@@ -94,7 +94,7 @@ export default function CensusMatrix() {
   useEffect(() => {
     const counts = data.census_counts || [];
     const newGrid = {};
-    
+
     counts.forEach(c => {
       if (c.date === selectedDate) {
         const key = `${c.pen_id}-${c.side}-${c.slot_number}`;
@@ -121,7 +121,7 @@ export default function CensusMatrix() {
     // Accept only integers
     const num = val === '' ? '' : parseInt(val, 10);
     if (isNaN(num) && val !== '') return;
-    
+
     setGridData(prev => ({
       ...prev,
       [key]: num
@@ -146,7 +146,7 @@ export default function CensusMatrix() {
     setSaveSuccess(false);
     try {
       const existingCounts = data.census_counts || [];
-      
+
       // Save all modified / filled cells
       for (const col of gridColumns) {
         for (let slot = 1; slot <= col.pen.slot_count; slot++) {
@@ -154,10 +154,10 @@ export default function CensusMatrix() {
           const currentCount = Number(gridData[key]) || 0;
 
           // Check if there is already a record in cache
-          const existing = existingCounts.find(c => 
-            c.pen_id === col.pen.id && 
-            c.side === col.side && 
-            c.slot_number === slot && 
+          const existing = existingCounts.find(c =>
+            c.pen_id === col.pen.id &&
+            c.side === col.side &&
+            c.slot_number === slot &&
             c.date === selectedDate
           );
 
@@ -208,7 +208,7 @@ export default function CensusMatrix() {
         display_order: order,
         is_active: true
       });
-      
+
       setShowAddPen(false);
       setNewPenName('');
       setNewPenGeneration('');
@@ -324,11 +324,10 @@ export default function CensusMatrix() {
           <button
             onClick={handleSaveGrid}
             disabled={saving}
-            className={`flex items-center gap-1.5 text-white font-bold px-4 py-1.5 rounded-lg text-xs shadow-md transition-all ${
-              saveSuccess 
-                ? 'bg-primary' 
+            className={`flex items-center gap-1.5 text-white font-bold px-4 py-1.5 rounded-lg text-xs shadow-md transition-all ${saveSuccess
+                ? 'bg-primary'
                 : 'bg-primary hover:bg-dark-green disabled:opacity-50'
-            }`}
+              }`}
           >
             {saveSuccess ? (
               <>
@@ -395,9 +394,8 @@ export default function CensusMatrix() {
                       <th
                         key={g.blockId}
                         colSpan={colSpan}
-                        className={`p-3 text-center border-r border-white/10 uppercase tracking-widest font-black ${
-                          idx % 2 === 0 ? 'bg-dark-green' : 'bg-[#1e421a]'
-                        }`}
+                        className={`p-3 text-center border-r border-white/10 uppercase tracking-widest font-black ${idx % 2 === 0 ? 'bg-dark-green' : 'bg-[#1e421a]'
+                          }`}
                       >
                         {g.blockName}
                       </th>
@@ -408,7 +406,7 @@ export default function CensusMatrix() {
                 {/* Pen headers - Row 2 */}
                 <tr className="bg-primary text-white text-[11px] font-sans sticky top-[39px] z-10 shadow-[0_1px_0_0_rgba(0,0,0,0.15)]">
                   <th className="p-3 border-r border-white/10 sticky left-0 bg-primary z-20">No.</th>
-                  {groupedPens.map(g => 
+                  {groupedPens.map(g =>
                     g.pens.map(pen => (
                       <th
                         key={pen.id}
@@ -507,7 +505,7 @@ export default function CensusMatrix() {
             <span>🐰</span>
             <span>General Livestock Census</span>
           </h3>
-          
+
           {role !== 'staff' && (
             <button
               onClick={() => setShowAddLivestock(true)}
@@ -520,44 +518,62 @@ export default function CensusMatrix() {
         </div>
 
         <div className="overflow-x-auto scrollbar-thin">
-          <table className="w-full border-collapse text-xs text-left">
-            <thead>
-              <tr className="bg-bg-farm border-b border-border-farm font-bold text-text-muted uppercase tracking-wider">
-                <th className="p-3">Category</th>
-                <th className="p-3">Type/Breed</th>
-                <th className="p-3 text-center">Male</th>
-                <th className="p-3 text-center">Female</th>
-                <th className="p-3 text-center">Unsexed</th>
-                <th className="p-3 text-center font-bold text-dark-green">Total</th>
-                <th className="p-3">Vendor</th>
-                <th className="p-3">Remarks</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border-farm/60">
-              {(data.general_census || []).length === 0 ? (
-                <tr>
-                  <td colSpan="8" className="p-6 text-center text-text-muted font-sans text-xs">
-                    No general livestock recorded.
-                  </td>
-                </tr>
-              ) : (
-                [...(data.general_census || [])]
-                  .sort((a, b) => new Date(b.date) - new Date(a.date))
-                  .map(row => (
-                    <tr key={row.id} className="hover:bg-bg-farm/20">
-                      <td className="p-3 font-bold text-text-primary">{row.category}</td>
-                      <td className="p-3 font-medium text-text-primary">{row.type_breed}</td>
-                      <td className="p-3 text-center font-mono">{row.male}</td>
-                      <td className="p-3 text-center font-mono">{row.female}</td>
-                      <td className="p-3 text-center font-mono">{row.unsexed}</td>
-                      <td className="p-3 text-center font-mono font-bold text-primary bg-green-50/30">{row.total}</td>
-                      <td className="p-3 text-text-muted">{row.vendor || '—'}</td>
-                      <td className="p-3 text-text-muted italic">{row.remarks || '—'}</td>
+          {(() => {
+            const allRows = data.general_census || [];
+            const nanRows = allRows.filter(r => !r.category || r.category === 'nan' || r.category === 'NaN' || r.category === 'undefined');
+            const cleanRows = allRows.filter(r => r.category && r.category !== 'nan' && r.category !== 'NaN' && r.category !== 'undefined');
+            return (
+              <>
+                {nanRows.length > 0 && (
+                  <div className="mb-3 bg-amber-50 border border-amber-300 rounded-xl px-4 py-3 text-xs text-amber-800 font-sans flex items-start gap-2">
+                    <span className="text-base leading-none mt-0.5">⚠️</span>
+                    <span>
+                      <strong>{nanRows.length} corrupted row{nanRows.length !== 1 ? 's' : ''} hidden</strong> — these rows have invalid "nan" category values.
+                      To remove them permanently, go to your <strong>Supabase Dashboard → Table Editor → general_census</strong> and delete rows where <code>category = 'nan'</code>.
+                    </span>
+                  </div>
+                )}
+                <table className="w-full border-collapse text-xs text-left">
+                  <thead>
+                    <tr className="bg-bg-farm border-b border-border-farm font-bold text-text-muted uppercase tracking-wider">
+                      <th className="p-3">Category</th>
+                      <th className="p-3">Type/Breed</th>
+                      <th className="p-3 text-center">Male</th>
+                      <th className="p-3 text-center">Female</th>
+                      <th className="p-3 text-center">Unsexed</th>
+                      <th className="p-3 text-center font-bold text-dark-green">Total</th>
+                      <th className="p-3">Vendor</th>
+                      <th className="p-3">Remarks</th>
                     </tr>
-                  ))
-              )}
-            </tbody>
-          </table>
+                  </thead>
+                  <tbody className="divide-y divide-border-farm/60">
+                    {cleanRows.length === 0 ? (
+                      <tr>
+                        <td colSpan="8" className="p-6 text-center text-text-muted font-sans text-xs">
+                          No general livestock recorded.
+                        </td>
+                      </tr>
+                    ) : (
+                      [...cleanRows]
+                        .sort((a, b) => new Date(b.date) - new Date(a.date))
+                        .map(row => (
+                          <tr key={row.id} className="hover:bg-bg-farm/20">
+                            <td className="p-3 font-bold text-text-primary">{row.category}</td>
+                            <td className="p-3 font-medium text-text-primary">{row.type_breed}</td>
+                            <td className="p-3 text-center font-mono">{row.male}</td>
+                            <td className="p-3 text-center font-mono">{row.female}</td>
+                            <td className="p-3 text-center font-mono">{row.unsexed}</td>
+                            <td className="p-3 text-center font-mono font-bold text-primary bg-green-50/30">{row.total}</td>
+                            <td className="p-3 text-text-muted">{row.vendor || '—'}</td>
+                            <td className="p-3 text-text-muted italic">{row.remarks || '—'}</td>
+                          </tr>
+                        ))
+                    )}
+                  </tbody>
+                </table>
+              </>
+            );
+          })()}
         </div>
       </div>
 
@@ -568,7 +584,7 @@ export default function CensusMatrix() {
           <div className="bg-white rounded-2xl border border-border-farm shadow-2xl max-w-[480px] w-full overflow-hidden animate-scale-in">
             <div className="bg-dark-green p-4 text-white font-serif font-bold text-base flex justify-between items-center">
               <span>Add New Cage Pen</span>
-              <button 
+              <button
                 onClick={() => setShowAddPen(false)}
                 className="text-white/60 hover:text-white font-sans text-lg"
               >
@@ -694,7 +710,7 @@ export default function CensusMatrix() {
           <div className="bg-white rounded-2xl border border-border-farm shadow-2xl max-w-[480px] w-full overflow-hidden animate-scale-in">
             <div className="bg-dark-green p-4 text-white font-serif font-bold text-base flex justify-between items-center">
               <span>Add Livestock Count</span>
-              <button 
+              <button
                 onClick={() => setShowAddLivestock(false)}
                 className="text-white/60 hover:text-white font-sans text-lg"
               >

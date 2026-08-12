@@ -1,13 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useData } from '../hooks/useData';
 import { useAuth } from '../context/AuthContext';
 import DatePicker from '../components/DatePicker';
-import { exportToExcel } from '../lib/csvExportImport';
-import { Plus, Receipt, Calendar, Download, ChevronRight } from 'lucide-react';
+import { exportToExcel, parseImportFile } from '../lib/csvExportImport';
+import { Plus, Receipt, Calendar, Download, Upload, ChevronRight } from 'lucide-react';
 
 export default function ExpensesLog() {
-  const { data, insertRecord } = useData();
+  const { data, insertRecord, bulkInsertRecords } = useData();
   const { worker } = useAuth();
+  const expImportRef = useRef(null);
   
   // Set month filter state (defaults to latest recorded month, e.g. "2026-08")
   const getLatestExpensesMonth = () => {
@@ -136,11 +137,41 @@ export default function ExpensesLog() {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Import CSV/Excel */}
+            <input
+              type="file"
+              ref={expImportRef}
+              className="hidden"
+              accept=".csv,.xlsx,.xls"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                try {
+                  const rows = await parseImportFile(file);
+                  const result = await bulkInsertRecords('expenses_log', rows);
+                  alert(`✅ Imported ${result?.count ?? rows.length} expense records successfully.`);
+                } catch (err) {
+                  alert('❌ Import failed: ' + err.message);
+                } finally {
+                  e.target.value = '';
+                }
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => expImportRef.current?.click()}
+              className="flex items-center gap-1.5 bg-white hover:bg-blue-50 text-dark-green font-bold px-3 py-2 rounded-lg text-xs border border-border-farm shadow-sm transition-all"
+              title="Import Expenses from CSV or Excel file"
+            >
+              <Upload className="w-3.5 h-3.5 text-blue-600" />
+              <span>Import CSV/Excel</span>
+            </button>
+
             <button
               type="button"
               onClick={() => exportToExcel(`fazky_expenses_${selectedMonth}`, 'Expenses', data.expenses_log || [])}
               className="flex items-center gap-1.5 bg-white hover:bg-emerald-50 text-dark-green font-bold px-3 py-2 rounded-lg text-xs border border-border-farm shadow-sm transition-all"
-              title="Export Expenses to Excel"
+              title="Export Expenses to Excel (.xlsx)"
             >
               <Download className="w-3.5 h-3.5 text-primary" />
               <span>Export</span>

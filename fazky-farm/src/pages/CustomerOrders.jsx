@@ -111,9 +111,9 @@ export default function CustomerOrders() {
             <ShoppingCart className="w-6 h-6" />
           </div>
           <div>
-            <h1 className="text-2xl font-serif font-bold text-dark-green">Farm CRM & Order Manager</h1>
+            <h1 className="text-2xl font-serif font-bold text-dark-green">Farm CRM & Sales Orders</h1>
             <p className="text-xs text-text-muted font-sans mt-0.5">
-              Direct customer sales orders, buyer directory, and printable official receipts
+              All orders here are written directly to the <strong>Sales Log</strong> — one unified record. Use this for customer lookups, quick sales entry, and printable receipts.
             </p>
           </div>
         </div>

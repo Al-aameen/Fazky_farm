@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useData } from '../hooks/useData';
 import { useAuth } from '../context/AuthContext';
 import DatePicker from '../components/DatePicker';
-import { exportToExcel } from '../lib/csvExportImport';
+import { exportToExcel, parseImportFile } from '../lib/csvExportImport';
 import { 
   TrendingUp, 
   Coins, 
@@ -10,7 +10,8 @@ import {
   Plus, 
   DollarSign, 
   History,
-  Download, 
+  Download,
+  Upload,
   BookOpen, 
   Wallet,
   Settings,
@@ -20,8 +21,9 @@ import {
 } from 'lucide-react';
 
 export default function SalesLog() {
-  const { data, insertRecord } = useData();
+  const { data, insertRecord, bulkInsertRecords } = useData();
   const { role, worker } = useAuth();
+  const salesImportRef = useRef(null);
   
   const [selectedDate, setSelectedDate] = useState('2026-08-05'); // Default seed date
   const [activeTab, setActiveTab] = useState('today'); // 'today', 'debtors', 'history'
@@ -317,12 +319,42 @@ export default function SalesLog() {
             />
           )}
 
+          {/* Import CSV/Excel Button */}
+          <input
+            type="file"
+            ref={salesImportRef}
+            className="hidden"
+            accept=".csv,.xlsx,.xls"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              try {
+                const rows = await parseImportFile(file);
+                const result = await bulkInsertRecords('sales_log', rows);
+                alert(`✅ Imported ${result?.count ?? rows.length} sales records successfully.`);
+              } catch (err) {
+                alert('❌ Import failed: ' + err.message);
+              } finally {
+                e.target.value = '';
+              }
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => salesImportRef.current?.click()}
+            className="flex items-center gap-1.5 bg-white hover:bg-blue-50 text-dark-green font-bold px-3 py-1.5 rounded-lg text-xs border border-border-farm shadow-sm transition-all"
+            title="Import Sales Log from CSV or Excel file"
+          >
+            <Upload className="w-3.5 h-3.5 text-blue-600" />
+            <span className="hidden sm:inline">Import CSV/Excel</span>
+          </button>
+
           {/* Export Action Button */}
           <button
             type="button"
             onClick={() => exportToExcel(`fazky_sales_log_${selectedDate}`, 'Sales', data.sales_log || [])}
             className="flex items-center gap-1.5 bg-white hover:bg-emerald-50 text-dark-green font-bold px-3 py-1.5 rounded-lg text-xs border border-border-farm shadow-sm transition-all"
-            title="Export Sales Log to Excel"
+            title="Export Sales Log to Excel (.xlsx)"
           >
             <Download className="w-3.5 h-3.5 text-primary" />
             <span className="hidden sm:inline">Export</span>
