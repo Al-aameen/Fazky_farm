@@ -1,14 +1,12 @@
 import React, { useState } from 'react';
 import { useData } from '../hooks/useData';
 import { useAuth } from '../context/AuthContext';
-import DatePicker from '../components/DatePicker';
 import WeatherWidget from '../components/WeatherWidget';
+import DatePicker from '../components/DatePicker';
 import { 
   TrendingUp, 
   TrendingDown, 
-  ChevronRight, 
   AlertTriangle, 
-  DollarSign, 
   Layers, 
   Calendar,
   Activity,
@@ -16,6 +14,7 @@ import {
   ShoppingBag,
   CreditCard
 } from 'lucide-react';
+
 
 export default function Dashboard() {
   const { data } = useData();
@@ -227,7 +226,7 @@ export default function Dashboard() {
 
   return (
     <div className="p-6 space-y-6">
-      {/* Date Select Panel */}
+      {/* Dashboard Header (no date picker - always shows latest data) */}
       <div className="flex items-center justify-between bg-white border border-border-farm rounded-2xl p-4 shadow-sm">
         <div className="flex items-center gap-2">
           <Calendar className="w-5 h-5 text-primary" />
@@ -238,17 +237,14 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
-        <DatePicker 
-          label="Record Date"
+        <DatePicker
+          label="Viewing"
           value={selectedDate}
           onChange={setSelectedDate}
         />
       </div>
 
-      {/* Farm Weather & Microclimate Telemetry */}
-      <WeatherWidget />
-
-      {/* KPI Cards Grid */}
+      {/* KPI Cards Grid — always above the fold */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Laying Poultry Card */}
         <div className="bg-white border border-border-farm rounded-2xl p-5 shadow-sm flex items-start justify-between">
@@ -287,10 +283,12 @@ export default function Dashboard() {
                 </span>
               )}
               {eggStats.trend === 'flat' && eggStats.today === 0 && eggStats.yesterday === 0 && (
-                <span className="text-text-muted bg-bg-farm px-1.5 py-0.5 rounded border border-border-farm">No data yet today</span>
+                <span className="text-text-muted bg-bg-farm px-1.5 py-0.5 rounded border border-border-farm italic">
+                  Not yet recorded today
+                </span>
               )}
-              {eggStats.trend === 'flat' && (eggStats.today > 0 || eggStats.yesterday > 0) && (
-                <span className="text-text-muted bg-bg-farm px-1.5 py-0.5 rounded border border-border-farm">No change vs yesterday</span>
+              {eggStats.trend === 'flat' && !(eggStats.today === 0 && eggStats.yesterday === 0) && (
+                <span className="text-text-muted bg-bg-farm px-1.5 py-0.5 rounded border border-border-farm">No change</span>
               )}
             </div>
           </div>
@@ -308,42 +306,49 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Admin Only Dashboard Widget */}
-      {role === 'admin' && (
-        <div className="bg-white border border-border-farm rounded-2xl shadow-sm overflow-hidden">
-          <div className="bg-dark-green px-5 py-3.5 text-white font-serif font-bold text-sm tracking-wide flex items-center gap-2">
-            <Activity className="w-4 h-4 text-accent" />
-            <span>Admin-Only Financial Dashboard</span>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 p-5">
-            <div className="border-r border-border-farm/60 pr-4 space-y-1.5">
-              <span className="text-[10px] text-text-muted font-bold uppercase tracking-widest">Today's Revenue</span>
-              <div className="text-2xl font-serif font-black text-primary">₦{getTodayRevenue().toLocaleString()}</div>
-              <p className="text-[10px] text-text-muted font-sans">Payments received today</p>
+      {/* Row 2: Admin Financial (2/3) + Weather Widget (1/3) */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {role === 'admin' && (
+          <div className="lg:col-span-2 bg-white border border-border-farm rounded-2xl shadow-sm overflow-hidden">
+            <div className="bg-dark-green px-5 py-3.5 text-white font-serif font-bold text-sm tracking-wide flex items-center gap-2">
+              <Activity className="w-4 h-4 text-accent" />
+              <span>Admin-Only Financial Dashboard</span>
             </div>
-            
-            <div className="border-r border-border-farm/60 pr-4 space-y-1.5">
-              <span className="text-[10px] text-text-muted font-bold uppercase tracking-widest">Today's Expenses</span>
-              <div className="text-2xl font-serif font-black text-red-accent">₦{getTodayExpenses().toLocaleString()}</div>
-              <p className="text-[10px] text-text-muted font-sans">Purchases & costs today</p>
-            </div>
-            
-            <div className="border-r border-border-farm/60 pr-4 space-y-1.5">
-              <span className="text-[10px] text-text-muted font-bold uppercase tracking-widest">Net Profit</span>
-              <div className="text-2xl font-serif font-black text-dark-green">
-                ₦{(getTodayRevenue() - getTodayExpenses()).toLocaleString()}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 p-5">
+              <div className="border-r border-border-farm/60 pr-4 space-y-1.5">
+                <span className="text-[10px] text-text-muted font-bold uppercase tracking-widest">Today's Revenue</span>
+                <div className="text-2xl font-serif font-black text-primary">₦{getTodayRevenue().toLocaleString()}</div>
+                <p className="text-[10px] text-text-muted font-sans">Payments received today</p>
               </div>
-              <p className="text-[10px] text-text-muted font-sans">Net margin for today</p>
-            </div>
-            
-            <div className="space-y-1.5">
-              <span className="text-[10px] text-text-muted font-bold uppercase tracking-widest">Outstanding Worker Loans</span>
-              <div className="text-2xl font-serif font-black text-amber-accent">₦{getOutstandingWorkerLoans().toLocaleString()}</div>
-              <p className="text-[10px] text-text-muted font-sans">Outstanding staff advances</p>
+              
+              <div className="border-r border-border-farm/60 pr-4 space-y-1.5">
+                <span className="text-[10px] text-text-muted font-bold uppercase tracking-widest">Today's Expenses</span>
+                <div className="text-2xl font-serif font-black text-red-accent">₦{getTodayExpenses().toLocaleString()}</div>
+                <p className="text-[10px] text-text-muted font-sans">Purchases &amp; costs today</p>
+              </div>
+              
+              <div className="border-r border-border-farm/60 pr-4 space-y-1.5">
+                <span className="text-[10px] text-text-muted font-bold uppercase tracking-widest">Net Profit</span>
+                <div className="text-2xl font-serif font-black text-dark-green">
+                  ₦{(getTodayRevenue() - getTodayExpenses()).toLocaleString()}
+                </div>
+                <p className="text-[10px] text-text-muted font-sans">Net margin for today</p>
+              </div>
+              
+              <div className="space-y-1.5">
+                <span className="text-[10px] text-text-muted font-bold uppercase tracking-widest">Outstanding Worker Loans</span>
+                <div className="text-2xl font-serif font-black text-amber-accent">₦{getOutstandingWorkerLoans().toLocaleString()}</div>
+                <p className="text-[10px] text-text-muted font-sans">Outstanding staff advances</p>
+              </div>
             </div>
           </div>
+        )}
+
+        {/* Weather Widget — compact right column */}
+        <div className={`bg-white border border-border-farm rounded-2xl overflow-hidden shadow-sm ${role !== 'admin' ? 'lg:col-span-3' : ''}`}>
+          <WeatherWidget />
         </div>
-      )}
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Feed Inventory Warning Module - Phase 2 */}
@@ -460,7 +465,7 @@ export default function Dashboard() {
       <div className="bg-white border border-border-farm rounded-2xl p-5 shadow-sm space-y-4">
         <h3 className="font-serif text-dark-green font-bold text-base flex items-center gap-1.5 border-b border-border-farm pb-3">
           <Layers className="w-4 h-4 text-primary" />
-          <span>Flock & Pen Status</span>
+          <span>Flock &amp; Pen Status</span>
         </h3>
         
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

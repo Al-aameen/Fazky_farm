@@ -243,7 +243,7 @@ export default function ProductionLog() {
             type="button"
             onClick={() => importRef.current?.click()}
             className="flex items-center gap-1.5 bg-white hover:bg-blue-50 text-dark-green font-bold px-3 py-1.5 rounded-lg text-xs border border-border-farm shadow-sm transition-all"
-            title="Import Production Log from CSV/Excel"
+            title="Import from CSV or Excel (.xlsx) — columns: date, pen_name, morning_eggs, evening_eggs, morning_feed, evening_feed, mortality"
           >
             <Upload className="w-3.5 h-3.5 text-blue-600" />
             <span className="hidden sm:inline">Import</span>
@@ -254,7 +254,7 @@ export default function ProductionLog() {
             type="button"
             onClick={() => exportToExcel(`fazky_production_log_${selectedDate}`, 'Production', data.production_log || [])}
             className="flex items-center gap-1.5 bg-white hover:bg-emerald-50 text-dark-green font-bold px-3 py-1.5 rounded-lg text-xs border border-border-farm shadow-sm transition-all"
-            title="Export Production Log to Excel"
+            title="Export as Excel (.xlsx) or CSV"
           >
             <Download className="w-3.5 h-3.5 text-primary" />
             <span className="hidden sm:inline">Export</span>
@@ -374,7 +374,8 @@ export default function ProductionLog() {
                                 onFocus={e => e.target.select()}
                                 onChange={e => handleCellChange(pen.id, 'morning_eggs', e.target.value)}
                                 style={{ minHeight: '44px' }}
-                                className="w-full text-center py-3.5 font-mono border-none bg-transparent text-text-primary focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none"
+                                className="w-full text-center py-3.5 font-mono border border-border-farm/40 bg-bg-farm/60 text-text-primary placeholder:text-text-muted/40 focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none hover:bg-bg-farm transition-colors rounded-sm"
+                                placeholder="0"
                               />
                             </td>
 
@@ -388,7 +389,8 @@ export default function ProductionLog() {
                                 onFocus={e => e.target.select()}
                                 onChange={e => handleCellChange(pen.id, 'evening_eggs', e.target.value)}
                                 style={{ minHeight: '44px' }}
-                                className="w-full text-center py-3.5 font-mono border-none bg-transparent text-text-primary focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none"
+                                className="w-full text-center py-3.5 font-mono border border-border-farm/40 bg-bg-farm/60 text-text-primary placeholder:text-text-muted/40 focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none hover:bg-bg-farm transition-colors rounded-sm"
+                                placeholder="0"
                               />
                             </td>
 
@@ -406,7 +408,8 @@ export default function ProductionLog() {
                                 onFocus={e => e.target.select()}
                                 onChange={e => handleCellChange(pen.id, 'morning_feed', e.target.value)}
                                 style={{ minHeight: '44px' }}
-                                className="w-full text-center py-3.5 font-mono border-none bg-transparent text-text-primary focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none"
+                                className="w-full text-center py-3.5 font-mono border border-border-farm/40 bg-bg-farm/60 text-text-primary placeholder:text-text-muted/40 focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none hover:bg-bg-farm transition-colors rounded-sm"
+                                placeholder="0"
                               />
                             </td>
 
@@ -419,7 +422,8 @@ export default function ProductionLog() {
                                 onFocus={e => e.target.select()}
                                 onChange={e => handleCellChange(pen.id, 'evening_feed', e.target.value)}
                                 style={{ minHeight: '44px' }}
-                                className="w-full text-center py-3.5 font-mono border-none bg-transparent text-text-primary focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none"
+                                className="w-full text-center py-3.5 font-mono border border-border-farm/40 bg-bg-farm/60 text-text-primary placeholder:text-text-muted/40 focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none hover:bg-bg-farm transition-colors rounded-sm"
+                                placeholder="0"
                               />
                             </td>
 
@@ -436,10 +440,11 @@ export default function ProductionLog() {
                                 pattern="[0-9]*"
                                 value={row.mortality ?? ''}
                                 onFocus={e => e.target.select()}
+                                placeholder="0"
                                 onChange={e => handleCellChange(pen.id, 'mortality', e.target.value)}
                                 style={{ minHeight: '44px' }}
-                                className={`w-full text-center py-3.5 font-mono font-bold border-none bg-transparent focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none ${
-                                  isMortalityPositive ? 'text-red-accent' : 'text-text-primary'
+                                className={`w-full text-center py-3.5 font-mono font-bold border border-border-farm/40 bg-bg-farm/60 placeholder:text-text-muted/40 focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none hover:bg-bg-farm transition-colors rounded-sm ${
+                                  isMortalityPositive ? 'text-red-accent bg-red-50/60' : 'text-text-primary'
                                 }`}
                               />
                             </td>
@@ -481,7 +486,7 @@ export default function ProductionLog() {
                     {grandTotals.total_eggs.toLocaleString()}
                   </td>
                   <td className="p-3 text-center font-mono">{grandTotals.morning_feed.toLocaleString()}</td>
-                  <td className="p-3 text-center font-mono">{grandTotals.morning_feed.toLocaleString()}</td>
+                  <td className="p-3 text-center font-mono">{grandTotals.evening_feed.toLocaleString()}</td>
                   <td className="p-3 text-center font-mono font-black text-primary bg-green-150/20 text-base">
                     {grandTotals.total_feed.toLocaleString()}
                   </td>
@@ -492,6 +497,72 @@ export default function ProductionLog() {
           </div>
         </div>
       )}
+
+      {/* Recent Production History */}
+      <div className="bg-white border border-border-farm rounded-2xl shadow-sm overflow-hidden">
+        <details>
+          <summary className="p-4 cursor-pointer font-serif text-dark-green font-bold text-base flex items-center gap-2 select-none hover:bg-bg-farm transition-colors">
+            📋 Recent Production History (last 14 days)
+          </summary>
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-xs text-left">
+              <thead>
+                <tr className="bg-bg-farm border-b border-border-farm font-bold text-text-muted uppercase tracking-wider">
+                  <th className="p-3">Date</th>
+                  <th className="p-3 text-center">Total Eggs</th>
+                  <th className="p-3 text-center">Total Feed (kg)</th>
+                  <th className="p-3 text-center">Mortality</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border-farm/60">
+                {(() => {
+                  const recentDates = [...new Set(
+                    (data.production_log || [])
+                      .map(p => p.date)
+                      .sort((a, b) => new Date(b) - new Date(a))
+                  )].slice(0, 14);
+
+                  if (recentDates.length === 0) {
+                    return (
+                      <tr>
+                        <td colSpan="4" className="p-6 text-center text-text-muted italic">
+                          No production history yet. Start entering daily records above.
+                        </td>
+                      </tr>
+                    );
+                  }
+
+                  return recentDates.map(date => {
+                    const dayLogs = (data.production_log || []).filter(p => p.date === date);
+                    const totalEggs = dayLogs.reduce((s, p) => s + (p.morning_eggs || 0) + (p.evening_eggs || 0), 0);
+                    const totalFeed = dayLogs.reduce((s, p) => s + (Number(p.morning_feed) || 0) + (Number(p.evening_feed) || 0), 0);
+                    const totalMort = dayLogs.reduce((s, p) => s + (p.mortality || 0), 0);
+                    const isSelected = date === selectedDate;
+
+                    return (
+                      <tr
+                        key={date}
+                        onClick={() => setSelectedDate(date)}
+                        className={`cursor-pointer hover:bg-light-green transition-colors ${isSelected ? 'bg-light-green font-bold' : ''}`}
+                      >
+                        <td className="p-3 font-mono font-bold text-text-primary">
+                          {date}
+                          {isSelected && <span className="ml-2 text-[10px] bg-primary text-white px-1.5 py-0.5 rounded">Viewing</span>}
+                        </td>
+                        <td className="p-3 text-center font-mono text-dark-green font-bold">{totalEggs.toLocaleString()}</td>
+                        <td className="p-3 text-center font-mono">{totalFeed.toFixed(1)}</td>
+                        <td className={`p-3 text-center font-mono ${totalMort > 0 ? 'text-red-accent font-bold' : 'text-text-muted'}`}>
+                          {totalMort}
+                        </td>
+                      </tr>
+                    );
+                  });
+                })()}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      </div>
     </div>
   );
 }

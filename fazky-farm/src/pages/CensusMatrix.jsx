@@ -222,6 +222,13 @@ export default function CensusMatrix() {
     e.preventDefault();
     if (!lsBreed) return;
 
+    // Validate to prevent nan/empty values from being stored
+    if (!lsCategory || lsCategory === 'nan' ||
+        !lsBreed || lsBreed === 'nan') {
+      alert('Please enter valid Category and Type/Breed values before saving.');
+      return;
+    }
+
     try {
       await insertRecord('general_census', {
         category: lsCategory,
@@ -272,7 +279,7 @@ export default function CensusMatrix() {
             type="button"
             onClick={() => exportToExcel(`fazky_bird_census_${selectedDate}`, 'Census', data.census_counts || [])}
             className="flex items-center gap-1.5 bg-white hover:bg-emerald-50 text-dark-green font-bold px-3 py-1.5 rounded-lg text-xs border border-border-farm shadow-sm transition-all"
-            title="Export Bird Census to Excel"
+            title="Export as Excel (.xlsx) or CSV"
           >
             <Download className="w-3.5 h-3.5 text-primary" />
             <span className="hidden sm:inline">Export</span>
@@ -302,7 +309,7 @@ export default function CensusMatrix() {
             type="button"
             onClick={() => censusImportRef.current?.click()}
             className="flex items-center gap-1.5 bg-white hover:bg-blue-50 text-dark-green font-bold px-3 py-1.5 rounded-lg text-xs border border-border-farm shadow-sm transition-all"
-            title="Import Census Data from CSV/Excel"
+            title="Import from CSV or Excel (.xlsx) — columns: pen_id, side, slot_number, bird_count, date"
           >
             <Upload className="w-3.5 h-3.5 text-blue-600" />
             <span className="hidden sm:inline">Import</span>

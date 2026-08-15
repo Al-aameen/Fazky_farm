@@ -79,8 +79,8 @@ export default function CustomerOrders() {
         cash_paid: paidVal,
         transfer_amount: 0,
         deposit_amount: 0,
-        is_payment: paymentStatus === 'Paid',
-        remarks: `Direct Customer Order (@ ₦${priceNum.toLocaleString()}/crate) - Status: ${paymentStatus}`,
+        is_payment: false,   // always false — this is a sale, not a debt settlement
+        remarks: `Direct Order (@ ₦${priceNum.toLocaleString()}/crate) - ${paymentStatus}`,
         created_by: worker?.id || 'admin'
       };
 

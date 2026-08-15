@@ -221,6 +221,32 @@ export default function Settings() {
                 <span className="text-primary font-bold">Delta Sync (Incremental)</span>
               </div>
             </div>
+
+            {/* Show failed / stuck items with clear option */}
+            {queuedCount > 0 && (
+              <div className="mt-3 space-y-2">
+                <p className="text-[10px] text-text-muted font-bold uppercase tracking-wider">
+                  Stuck Queue Items — click Clear to discard:
+                </p>
+                <button
+                  onClick={async () => {
+                    if (window.confirm(
+                      `This will permanently discard ${queuedCount} unsynced record(s) from the offline queue. Only do this if you are certain these changes are already saved in Supabase, or if the records are test/invalid data. Continue?`
+                    )) {
+                      const { initDB } = await import('../lib/offlineQueue');
+                      const db = await initDB();
+                      const tx = db.transaction('sync_queue', 'readwrite');
+                      await tx.objectStore('sync_queue').clear();
+                      await tx.done;
+                      window.location.reload();
+                    }
+                  }}
+                  className="w-full font-bold py-2 rounded-xl text-xs shadow-sm flex items-center justify-center gap-2 bg-red-50 border border-red-200 text-red-700 hover:bg-red-100 transition-all"
+                >
+                  🗑️ Clear All Stuck Queue Items ({queuedCount})
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="space-y-2">

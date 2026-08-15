@@ -55,7 +55,7 @@ const SEED_DATA = {
     { id: 'pen-iyazainab', pen_block_id: 'pb-c', name: 'Iya Zainab / Arisha Pen', worker_id: 'w-iyazainab', has_sides: true, slot_count: 14, generation: 'Batch 4', display_order: 1, is_active: true, created_at: new Date().toISOString() },
     { id: 'pen-alfataye', pen_block_id: 'pb-c', name: 'Alfa Taye Pen', worker_id: 'w-alfataye', has_sides: true, slot_count: 13, generation: 'Batch 4', display_order: 2, is_active: true, created_at: new Date().toISOString() },
     // Pen Block D
-    { id: 'pen-small', pen_block_id: 'pb-d', name: 'Various smaller pens', worker_id: 'w-amos', has_sides: false, slot_count: 10, generation: 'Batch 5', display_order: 1, is_active: true, created_at: new Date().toISOString() }
+    { id: 'pen-small', pen_block_id: 'pb-d', name: 'Amos Pen', worker_id: 'w-amos', has_sides: false, slot_count: 10, generation: 'Batch 5', display_order: 1, is_active: true, created_at: new Date().toISOString() }
   ],
   general_census: historicalData.general_census || [],
   egg_price_settings: [
@@ -289,9 +289,11 @@ export function DataProvider({ children }) {
     if (!isOnline || !isSupabaseConfigured || isSyncing) return;
     setIsSyncing(true);
     try {
-      const remaining = await flushSyncQueue(supabase);
-      setQueuedCount(remaining);
-      if (remaining === 0) {
+      await flushSyncQueue(supabase);
+      // Re-read actual remaining (including failed items) so the count is accurate
+      const queue = await getSyncQueue();
+      setQueuedCount(queue.length);
+      if (queue.length === 0) {
         // Refresh local cache once sync completes
         await syncFromSupabase(data);
       }

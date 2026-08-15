@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { useData } from '../hooks/useData';
 import { useAuth } from '../context/AuthContext';
 import DatePicker from '../components/DatePicker';
@@ -22,12 +22,34 @@ export default function ExpensesLog() {
 
   const [selectedMonth, setSelectedMonth] = useState(getLatestExpensesMonth());
   const [showAddExpense, setShowAddExpense] = useState(false);
+  // Jump-to-date state — defaults to today
+  const [jumpDate, setJumpDate] = useState(new Date().toISOString().split('T')[0]);
+  const [highlightedDate, setHighlightedDate] = useState(null);
+  // Ref map for each date group — used to scroll-to on date jump
+  const groupRefs = useRef({});
 
   // New Expense form inputs
   const [expDate, setExpDate] = useState(new Date().toISOString().split('T')[0]);
   const [expDesc, setExpDesc] = useState('');
   const [expAmt, setExpAmt] = useState('');
   const [expRemarks, setExpRemarks] = useState('');
+
+  // Handle jump-to-date: switch month and scroll to group
+  const handleJumpToDate = useCallback((dateStr) => {
+    setJumpDate(dateStr);
+    const monthStr = dateStr.substring(0, 7);
+    setSelectedMonth(monthStr);
+    setHighlightedDate(dateStr);
+    // Scroll after state update
+    requestAnimationFrame(() => {
+      const el = groupRefs.current[dateStr];
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    });
+    // Clear highlight after 3 s
+    setTimeout(() => setHighlightedDate(null), 3000);
+  }, []);
 
   // Filter expenses by selectedMonth (YYYY-MM)
   const getFilteredExpenses = () => {
@@ -136,6 +158,13 @@ export default function ExpensesLog() {
             </select>
           </div>
 
+          {/* Date Picker — jump to specific date within the month */}
+          <DatePicker
+            label="Jump to Date"
+            value={jumpDate}
+            onChange={handleJumpToDate}
+          />
+
           <div className="flex items-center gap-2">
             {/* Import CSV/Excel */}
             <input
@@ -202,7 +231,15 @@ export default function ExpensesLog() {
             </p>
           ) : (
             groupedExpenses.map(group => (
-              <div key={group.date} className="space-y-2">
+              <div
+                key={group.date}
+                ref={el => { groupRefs.current[group.date] = el; }}
+                className={`space-y-2 rounded-xl transition-all duration-500 ${
+                  highlightedDate === group.date
+                    ? 'ring-2 ring-yellow-400 bg-yellow-50/30 px-2 py-1'
+                    : ''
+                }`}
+              >
                 {/* Date header */}
                 <div className="flex justify-between items-center text-xs font-bold bg-bg-farm/70 border border-border-farm/60 px-3 py-2 rounded-lg">
                   <span className="text-dark-green font-serif">{group.date}</span>
@@ -268,6 +305,12 @@ export default function ExpensesLog() {
                   placeholder="e.g. diesel generator repair, layer bags purchase"
                   className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none"
                 />
+                {/off.?pay|offpay/i.test(expDesc) && (
+                  <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5 mt-1 flex items-center gap-1.5">
+                    ⚠️ This looks like a worker bonus. Consider recording it in
+                    <strong>Payroll → Off-Pay</strong> so it feeds into salary calculations.
+                  </p>
+                )}
               </div>
 
               <div>

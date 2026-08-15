@@ -92,7 +92,8 @@ export async function flushSyncQueue(supabase) {
   const queue = await getSyncQueue();
   if (queue.length === 0) return 0;
 
-  for (const item of queue) {
+  for (let i = 0; i < queue.length; i++) {
+    const item = queue[i];
     const { id, table, action, payload } = item;
     try {
       if (action === 'INSERT') {
@@ -108,7 +109,19 @@ export async function flushSyncQueue(supabase) {
       await dequeueSync(id);
     } catch (err) {
       console.error(`Failed to sync item ${id} in queue:`, err);
-      break;
+      // Store error info on the queue item for display in Settings
+      try {
+        const db = await initDB();
+        const existing = await db.get('sync_queue', id);
+        if (existing) {
+          await db.put('sync_queue', {
+            ...existing,
+            lastError: err.message || String(err),
+            failedAt: new Date().toISOString()
+          });
+        }
+      } catch (_) {}
+      // Continue to next item instead of breaking
     }
   }
 
