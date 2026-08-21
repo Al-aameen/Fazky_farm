@@ -95,10 +95,13 @@ CREATE TABLE IF NOT EXISTS sales_log (
   transfer_amount NUMERIC NOT NULL DEFAULT 0 CHECK (transfer_amount >= 0),
   deposit_amount NUMERIC NOT NULL DEFAULT 0 CHECK (deposit_amount >= 0),
   is_payment BOOLEAN NOT NULL DEFAULT FALSE,
+  is_bird_sale BOOLEAN NOT NULL DEFAULT FALSE,
   remarks TEXT,
   created_by UUID REFERENCES workers(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- Additive patch: metadata for custom dynamic columns (safe to re-run)
+ALTER TABLE sales_log ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;
 
 -- 8. Egg Price Settings Table
 CREATE TABLE IF NOT EXISTS egg_price_settings (
@@ -120,6 +123,8 @@ CREATE TABLE IF NOT EXISTS expenses_log (
   created_by UUID REFERENCES workers(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- Additive patch: metadata for custom dynamic columns (safe to re-run)
+ALTER TABLE expenses_log ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;
 
 -- 10. Maize Records Table
 CREATE TABLE IF NOT EXISTS maize_records (
@@ -206,16 +211,17 @@ CREATE TABLE IF NOT EXISTS feed_inventory_log (
 -- =========================================================================
 
 -- Helper: Get current worker role
-CREATE OR REPLACE FUNCTION my_role()
+-- Uses (select auth.uid()) so the value is evaluated once per query, not once per row.
+CREATE OR REPLACE FUNCTION public.my_role()
 RETURNS TEXT AS $$
-  SELECT role FROM workers WHERE auth_user_id = auth.uid() LIMIT 1;
-$$ LANGUAGE sql SECURITY DEFINER;
+  SELECT role FROM public.workers WHERE auth_user_id = (SELECT auth.uid()) LIMIT 1;
+$$ LANGUAGE sql SECURITY DEFINER SET search_path = public;
 
 -- Helper: Get current worker ID
-CREATE OR REPLACE FUNCTION my_worker_id()
+CREATE OR REPLACE FUNCTION public.my_worker_id()
 RETURNS UUID AS $$
-  SELECT id FROM workers WHERE auth_user_id = auth.uid() LIMIT 1;
-$$ LANGUAGE sql SECURITY DEFINER;
+  SELECT id FROM public.workers WHERE auth_user_id = (SELECT auth.uid()) LIMIT 1;
+$$ LANGUAGE sql SECURITY DEFINER SET search_path = public;
 
 -- Enable Row Level Security on all tables
 ALTER TABLE workers ENABLE ROW LEVEL SECURITY;
@@ -242,7 +248,7 @@ ALTER TABLE feed_inventory_log ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS workers_select ON workers;
 DROP POLICY IF EXISTS workers_all_admin ON workers;
 CREATE POLICY workers_select ON workers FOR SELECT USING (
-  auth.uid() = auth_user_id OR my_role() IN ('admin', 'manager')
+  (SELECT auth.uid()) = auth_user_id OR my_role() IN ('admin', 'manager')
 );
 CREATE POLICY workers_all_admin ON workers FOR ALL USING (
   my_role() = 'admin'
@@ -572,3 +578,163 @@ CREATE TRIGGER trg_feed_inventory_updated_at
 
 CREATE TRIGGER trg_feed_inventory_log_updated_at
   BEFORE UPDATE ON feed_inventory_log FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+
+-- =========================================================================
+-- PART 4: FLOCK LIFECYCLE MODULE
+-- Tables for tracking chicks from arrival through grower stage to culling/sale.
+-- =========================================================================
+
+-- 17. Batches Table (chick batch registry)
+CREATE TABLE IF NOT EXISTS batches (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  batch_name TEXT NOT NULL,
+  arrival_date DATE NOT NULL,
+  vendor TEXT,
+  quantity_arrived INT NOT NULL CHECK (quantity_arrived > 0),
+  breed TEXT,
+  cost_per_bird NUMERIC(10, 2),
+  expected_lay_date DATE,
+  status TEXT NOT NULL DEFAULT 'growing' CHECK (status IN ('growing', 'laying', 'culled')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 18. Grower Logs Table (weekly headcount & weight tracking)
+CREATE TABLE IF NOT EXISTS grower_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  batch_id UUID NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
+  date DATE NOT NULL DEFAULT CURRENT_DATE,
+  headcount INT NOT NULL CHECK (headcount >= 0),
+  avg_weight NUMERIC(8, 2),
+  feed_consumed NUMERIC(10, 2),
+  health_notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 19. Flock Sales Table (spent layer sales — auto-deducts from census_counts)
+CREATE TABLE IF NOT EXISTS flock_sales (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  date DATE NOT NULL DEFAULT CURRENT_DATE,
+  source_type TEXT NOT NULL CHECK (source_type IN ('batch', 'pen')),
+  batch_id UUID REFERENCES batches(id) ON DELETE SET NULL,
+  pen_id UUID REFERENCES pens(id) ON DELETE SET NULL,
+  quantity_sold INT NOT NULL CHECK (quantity_sold > 0),
+  price_per_bird NUMERIC(10, 2),
+  buyer_name TEXT,
+  total_revenue NUMERIC(12, 2),
+  payment_method TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- RLS for Flock Lifecycle tables
+ALTER TABLE batches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grower_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE flock_sales ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS batches_all ON batches;
+CREATE POLICY batches_all ON batches FOR ALL USING (
+  my_role() IN ('admin', 'manager')
+);
+
+DROP POLICY IF EXISTS grower_logs_all ON grower_logs;
+CREATE POLICY grower_logs_all ON grower_logs FOR ALL USING (
+  my_role() IN ('admin', 'manager')
+);
+
+DROP POLICY IF EXISTS flock_sales_all ON flock_sales;
+CREATE POLICY flock_sales_all ON flock_sales FOR ALL USING (
+  my_role() IN ('admin', 'manager')
+);
+
+-- Delta sync updated_at triggers for new tables
+DROP TRIGGER IF EXISTS trg_batches_updated_at ON batches;
+DROP TRIGGER IF EXISTS trg_grower_logs_updated_at ON grower_logs;
+DROP TRIGGER IF EXISTS trg_flock_sales_updated_at ON flock_sales;
+
+CREATE TRIGGER trg_batches_updated_at
+  BEFORE UPDATE ON batches FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_grower_logs_updated_at
+  BEFORE UPDATE ON grower_logs FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_flock_sales_updated_at
+  BEFORE UPDATE ON flock_sales FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- Trigger: auto-deduct sold birds from census_counts (same logic as mortality trigger)
+CREATE OR REPLACE FUNCTION fn_deduct_sold_birds_from_census()
+RETURNS TRIGGER AS $$
+DECLARE
+  v_remaining INT := NEW.quantity_sold;
+  r_slot RECORD;
+BEGIN
+  IF NEW.source_type = 'pen' AND NEW.pen_id IS NOT NULL AND NEW.quantity_sold > 0 THEN
+    FOR r_slot IN
+      SELECT id, bird_count
+      FROM census_counts
+      WHERE pen_id = NEW.pen_id AND date = NEW.date AND bird_count > 0
+      ORDER BY slot_number ASC
+    LOOP
+      IF v_remaining <= 0 THEN EXIT; END IF;
+      IF r_slot.bird_count >= v_remaining THEN
+        UPDATE census_counts SET bird_count = bird_count - v_remaining WHERE id = r_slot.id;
+        v_remaining := 0;
+      ELSE
+        v_remaining := v_remaining - r_slot.bird_count;
+        UPDATE census_counts SET bird_count = 0 WHERE id = r_slot.id;
+      END IF;
+    END LOOP;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS trg_deduct_flock_sales ON flock_sales;
+CREATE TRIGGER trg_deduct_flock_sales
+  AFTER INSERT ON flock_sales
+  FOR EACH ROW EXECUTE FUNCTION fn_deduct_sold_birds_from_census();
+
+-- ─── Part 5: Additive patch — Grower Tracker mortality column ────────────────
+-- Safe to run multiple times (IF NOT EXISTS).
+ALTER TABLE grower_logs ADD COLUMN IF NOT EXISTS mortality INT DEFAULT 0 CHECK (mortality >= 0);
+
+-- ─── Part 6: Performance Indexes for RLS-filtered columns ────────────────────
+-- Without these, PostgreSQL performs a full sequential table scan for every RLS
+-- policy check. These indexes ensure O(log n) lookups instead of O(n) scans.
+-- All use IF NOT EXISTS so this block is safe to re-run on a live database.
+
+-- workers.auth_user_id — the single most important index.
+-- my_role() and my_worker_id() both query this column on every RLS evaluation.
+CREATE INDEX IF NOT EXISTS idx_workers_auth_user_id
+  ON public.workers (auth_user_id);
+
+-- pens.worker_id — used by census_counts and production_log sub-select policies.
+CREATE INDEX IF NOT EXISTS idx_pens_worker_id
+  ON public.pens (worker_id);
+
+-- census_counts.pen_id — RLS policy filters census by pen_id.
+CREATE INDEX IF NOT EXISTS idx_census_counts_pen_id
+  ON public.census_counts (pen_id);
+
+-- production_log.pen_id — RLS policy filters production log by pen_id.
+CREATE INDEX IF NOT EXISTS idx_production_log_pen_id
+  ON public.production_log (pen_id);
+
+-- Delta-sync performance: the app queries every table by updated_at timestamp.
+-- Without these, each sync performs a full scan of every table.
+CREATE INDEX IF NOT EXISTS idx_workers_updated_at           ON public.workers           (updated_at);
+CREATE INDEX IF NOT EXISTS idx_pens_updated_at              ON public.pens              (updated_at);
+CREATE INDEX IF NOT EXISTS idx_census_counts_updated_at     ON public.census_counts     (updated_at);
+CREATE INDEX IF NOT EXISTS idx_production_log_updated_at    ON public.production_log    (updated_at);
+CREATE INDEX IF NOT EXISTS idx_sales_log_updated_at         ON public.sales_log         (updated_at);
+CREATE INDEX IF NOT EXISTS idx_expenses_log_updated_at      ON public.expenses_log      (updated_at);
+CREATE INDEX IF NOT EXISTS idx_feed_inventory_updated_at    ON public.feed_inventory    (updated_at);
+CREATE INDEX IF NOT EXISTS idx_feed_inventory_log_updated_at ON public.feed_inventory_log (updated_at);
+
+-- Flock lifecycle tables — batch_id is the join key on all grower queries.
+CREATE INDEX IF NOT EXISTS idx_grower_logs_batch_id         ON public.grower_logs       (batch_id);
+CREATE INDEX IF NOT EXISTS idx_grower_logs_date             ON public.grower_logs       (date);
+CREATE INDEX IF NOT EXISTS idx_flock_sales_pen_id           ON public.flock_sales       (pen_id);
+CREATE INDEX IF NOT EXISTS idx_flock_sales_batch_id         ON public.flock_sales       (batch_id);

@@ -18,7 +18,8 @@ import {
   Settings as SettingsIcon,
   Package,
   Activity,
-  ShoppingCart
+  ShoppingCart,
+  Egg
 } from 'lucide-react';
 
 export default function MainLayout({ activePage, setActivePage, children }) {
@@ -30,8 +31,9 @@ export default function MainLayout({ activePage, setActivePage, children }) {
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['admin', 'manager'] },
     { id: 'census', label: 'Bird Census', icon: Grid, roles: ['admin', 'manager', 'staff'] },
     { id: 'production', label: 'Production Log', icon: ClipboardList, roles: ['admin', 'manager', 'staff'] },
-    { id: 'flockhealth', label: 'Flock Health', icon: Activity, roles: ['admin', 'manager', 'staff'] },
-    { id: 'feedwatch', label: 'Feed & Stock', icon: Package, roles: ['admin', 'manager', 'staff'] },
+    { id: 'flockhealth',    label: 'Flock Health',     icon: Activity,    roles: ['admin', 'manager', 'staff'] },
+    { id: 'flocklifecycle', label: 'Flock Lifecycle',  icon: Egg,         roles: ['admin', 'manager'] },
+    { id: 'feedwatch',      label: 'Feed & Stock',     icon: Package,     roles: ['admin', 'manager', 'staff'] },
     { id: 'sales', label: 'Sales Log', icon: CircleDollarSign, roles: ['admin', 'manager'] },
     { id: 'customerorders', label: 'Orders & CRM', icon: ShoppingCart, roles: ['admin', 'manager'] },
     { id: 'expenses', label: 'Daily Expenses', icon: Receipt, roles: ['admin', 'manager'] },

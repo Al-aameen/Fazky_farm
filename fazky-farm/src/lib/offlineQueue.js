@@ -19,7 +19,11 @@ export const TABLE_NAMES = [
   'loan_repayments',
   'off_pays',
   'feed_inventory',
-  'feed_inventory_log'
+  'feed_inventory_log',
+  // Flock Lifecycle (Part 4)
+  'batches',
+  'grower_logs',
+  'flock_sales'
 ];
 
 export async function initDB() {
@@ -89,6 +93,15 @@ export async function dequeueSync(id) {
 // Optimized high-speed queue flusher
 export async function flushSyncQueue(supabase) {
   if (!supabase) return 0;
+
+  // Fix 1: Guard against flushing with the anon key — bail silently if no
+  // authenticated session exists to avoid 403 floods on the workers table.
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) {
+    console.warn('No active session — skipping queue flush');
+    return 0;
+  }
+
   const queue = await getSyncQueue();
   if (queue.length === 0) return 0;
 

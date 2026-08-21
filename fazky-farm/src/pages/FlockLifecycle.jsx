@@ -1,0 +1,940 @@
+import React, { useState, useMemo, useCallback } from 'react';
+import { useData } from '../hooks/useData';
+import { useAuth } from '../context/AuthContext';
+import DatePicker from '../components/DatePicker';
+import {
+  Egg, Plus, ArrowRight, TrendingDown, ClipboardList,
+  DollarSign, ChevronDown, ChevronUp, Award, Trash2, Bird,
+  Save, Calendar
+} from 'lucide-react';
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const todayStr = () => new Date().toISOString().split('T')[0];
+const fmt = (n) => (n ?? 0).toLocaleString('en-NG', { minimumFractionDigits: 0 });
+const currency = (n) =>
+  '\u20a6' + (parseFloat(n) || 0).toLocaleString('en-NG', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+
+function daysBetween(fromISO, toISO) {
+  const a = new Date(fromISO);
+  const b = new Date(toISO);
+  return Math.max(0, Math.floor((b - a) / 86400000));
+}
+
+function weekProgress(batch, selectedDate) {
+  const daysOld  = daysBetween(batch.arrival_date, selectedDate);
+  const weekOld  = Math.ceil(daysOld / 7) || 1;
+  if (!batch.expected_lay_date) return { daysOld, weekOld, totalWeeks: null, pct: null };
+  const totalDays  = daysBetween(batch.arrival_date, batch.expected_lay_date);
+  const totalWeeks = Math.ceil(totalDays / 7);
+  const pct        = Math.min(100, totalDays > 0 ? Math.round((daysOld / totalDays) * 100) : 0);
+  return { daysOld, weekOld, totalWeeks, pct };
+}
+
+// ─── Status Badge ─────────────────────────────────────────────────────────────
+function StatusBadge({ status }) {
+  const map = {
+    growing: 'bg-amber-100 text-amber-800',
+    laying:  'bg-emerald-100 text-emerald-800',
+    culled:  'bg-red-100 text-red-700',
+  };
+  return (
+    <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full ${map[status] ?? 'bg-gray-100 text-gray-600'}`}>
+      {status}
+    </span>
+  );
+}
+
+// ─── Modal shell ──────────────────────────────────────────────────────────────
+function Modal({ title, onClose, children }) {
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl max-w-lg w-full p-6 border border-border-farm shadow-2xl space-y-4">
+        <div className="flex items-center justify-between border-b border-border-farm pb-3">
+          <h3 className="font-serif font-bold text-dark-green text-lg">{title}</h3>
+          <button onClick={onClose} className="text-text-muted hover:text-dark-green font-bold text-lg leading-none">&#x2715;</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ─── Field label wrapper ──────────────────────────────────────────────────────
+function Field({ label, children }) {
+  return (
+    <div>
+      <label className="block text-[10px] font-black text-text-muted uppercase tracking-wider mb-1">{label}</label>
+      {children}
+    </div>
+  );
+}
+
+const inputCls  = 'w-full bg-bg-farm border border-border-farm rounded-xl px-3 py-2 text-sm font-semibold focus:ring-2 focus:ring-accent outline-none transition-all';
+const selectCls = inputCls + ' appearance-none cursor-pointer';
+
+// ─── Inline grid cell ─────────────────────────────────────────────────────────
+function GridCell({ value, onChange, type = 'number', placeholder = '0', readOnly = false, cellClass = '' }) {
+  return (
+    <input
+      type={type}
+      min={type === 'number' ? '0' : undefined}
+      step={type === 'number' ? 'any' : undefined}
+      value={value}
+      readOnly={readOnly}
+      onChange={e => !readOnly && onChange(e.target.value)}
+      onFocus={e => e.target.select()}
+      placeholder={placeholder}
+      className={`w-full text-center text-xs font-semibold bg-white border border-border-farm rounded-lg px-2 py-1.5
+        focus:ring-2 focus:ring-accent outline-none transition-all min-h-[36px]
+        ${readOnly ? 'bg-bg-farm text-text-muted cursor-default border-transparent' : 'hover:border-accent/60'}
+        ${cellClass}`}
+    />
+  );
+}
+
+// ─── Tab list ─────────────────────────────────────────────────────────────────
+const TABS = [
+  { id: 'batches', label: 'Batch Registry',       icon: ClipboardList },
+  { id: 'grower',  label: 'Grower Tracker',        icon: TrendingDown  },
+  { id: 'sales',   label: 'Flock Sales / Culling', icon: DollarSign    },
+];
+
+// =============================================================================
+export default function FlockLifecycle() {
+  const { data, insertRecord, updateRecord, deleteRecord } = useData();
+  const { role } = useAuth();
+
+  const [activeTab,     setActiveTab]     = useState('batches');
+  const [expandedBatch, setExpandedBatch] = useState(null);
+
+  // Modals
+  const [showBatchModal, setShowBatchModal] = useState(false);
+  const [showSaleModal,  setShowSaleModal]  = useState(false);
+
+  // ── Batch form ────────────────────────────────────────────────────────────
+  const [batchName,   setBatchName]   = useState('');
+  const [arrivalDate, setArrivalDate] = useState(todayStr());
+  const [vendor,      setVendor]      = useState('');
+  const [qty,         setQty]         = useState('');
+  const [breed,       setBreed]       = useState('');
+  const [costPerBird, setCostPerBird] = useState('');
+  const [expectedLay, setExpectedLay] = useState('');
+
+  // ── Sale form ─────────────────────────────────────────────────────────────
+  const [saleDate,      setSaleDate]      = useState(todayStr());
+  const [sourceType,    setSourceType]    = useState('pen');
+  const [saleBatchId,   setSaleBatchId]   = useState('');
+  const [salePenId,     setSalePenId]     = useState('');
+  const [quantitySold,  setQuantitySold]  = useState('');
+  const [pricePerBird,  setPricePerBird]  = useState('');
+  const [buyerName,     setBuyerName]     = useState('');
+  const [paymentMethod, setPaymentMethod] = useState('Cash');
+
+  // ── Grower weekly grid ────────────────────────────────────────────────────
+  // growerGrid[batchId] holds the unsaved cell edits for the selected date
+  const [growerDate, setGrowerDate] = useState(todayStr());
+  const [growerGrid, setGrowerGrid] = useState({});   // { [batchId]: { headcount, avg_weight, ... } }
+  const [gridSaving, setGridSaving] = useState(false);
+  const [gridSaved,  setGridSaved]  = useState(false);
+
+  const [submitting, setSubmitting] = useState(false);
+
+  // ── Data shortcuts ────────────────────────────────────────────────────────
+  const batches    = data.batches     || [];
+  const growerLogs = data.grower_logs || [];
+  const flockSales = data.flock_sales  || [];
+  const pens       = data.pens        || [];
+
+  const growingBatches = useMemo(
+    () => batches.filter(b => b.status === 'growing'),
+    [batches]
+  );
+
+  // ── Grid helpers ──────────────────────────────────────────────────────────
+  // Returns the existing DB row for batchId+growerDate if one exists
+  const existingLog = useCallback(
+    (batchId) => growerLogs.find(l => l.batch_id === batchId && l.date === growerDate),
+    [growerLogs, growerDate]
+  );
+
+  // Returns the effective row: DB data first, local edits on top
+  const getGridRow = useCallback((batchId) => {
+    const ex = existingLog(batchId);
+    return {
+      headcount:     ex?.headcount     ?? '',
+      avg_weight:    ex?.avg_weight    ?? '',
+      feed_consumed: ex?.feed_consumed ?? '',
+      mortality:     ex?.mortality     ?? '',
+      health_notes:  ex?.health_notes  ?? '',
+      ...(growerGrid[batchId] || {}),
+    };
+  }, [existingLog, growerGrid]);
+
+  const updateGridCell = (batchId, field, value) => {
+    setGridSaved(false);
+    setGrowerGrid(prev => ({
+      ...prev,
+      [batchId]: { ...getGridRow(batchId), [field]: value },
+    }));
+  };
+
+  // ── Derived totals ────────────────────────────────────────────────────────
+  const totalBirdsGrowing = growingBatches.reduce((s, b) => s + (parseInt(b.quantity_arrived) || 0), 0);
+  const totalRevenue       = flockSales.reduce((s, fs) => s + (parseFloat(fs.total_revenue)  || 0), 0);
+  const totalSold          = flockSales.reduce((s, fs) => s + (parseInt(fs.quantity_sold)    || 0), 0);
+
+  // ── Save all grower grid rows ─────────────────────────────────────────────
+  const handleSaveAllGrowth = async () => {
+    // Only save rows that have at least headcount entered
+    const rows = growingBatches
+      .map(b => ({ batch: b, row: getGridRow(b.id) }))
+      .filter(({ row }) => String(row.headcount).trim() !== '');
+
+    if (rows.length === 0) return;
+    setGridSaving(true);
+    try {
+      for (const { batch, row } of rows) {
+        const ex      = existingLog(batch.id);
+        const payload = {
+          batch_id:      batch.id,
+          date:          growerDate,
+          headcount:     parseInt(row.headcount),
+          avg_weight:    row.avg_weight    !== '' ? parseFloat(row.avg_weight)    : null,
+          feed_consumed: row.feed_consumed !== '' ? parseFloat(row.feed_consumed) : null,
+          mortality:     row.mortality     !== '' ? parseInt(row.mortality)       : null,
+          health_notes:  row.health_notes  || null,
+        };
+        if (ex) {
+          await updateRecord('grower_logs', { id: ex.id, ...payload });
+        } else {
+          await insertRecord('grower_logs', payload);
+        }
+      }
+      setGrowerGrid({});
+      setGridSaved(true);
+      setTimeout(() => setGridSaved(false), 3000);
+    } finally {
+      setGridSaving(false);
+    }
+  };
+
+  // ── Batch form submit ─────────────────────────────────────────────────────
+  const handleAddBatch = async (e) => {
+    e.preventDefault();
+    if (!batchName || !qty) return;
+    setSubmitting(true);
+    try {
+      await insertRecord('batches', {
+        batch_name:        batchName.trim(),
+        arrival_date:      arrivalDate,
+        vendor:            vendor.trim()    || null,
+        quantity_arrived:  parseInt(qty),
+        breed:             breed.trim()     || null,
+        cost_per_bird:     costPerBird      ? parseFloat(costPerBird) : null,
+        expected_lay_date: expectedLay      || null,
+        status:            'growing',
+      });
+      setShowBatchModal(false);
+      setBatchName(''); setQty(''); setVendor(''); setBreed(''); setCostPerBird(''); setExpectedLay('');
+    } finally { setSubmitting(false); }
+  };
+
+  const handleGraduate = async (batch) => {
+    if (!window.confirm(
+      `Graduate "${batch.batch_name}" to Laying status?\n\nThis marks the batch as 'laying'. Update the pen census manually.`
+    )) return;
+    await updateRecord('batches', { id: batch.id, status: 'laying' });
+  };
+
+  // ── Sale form submit ──────────────────────────────────────────────────────
+  const handleAddFlockSale = async (e) => {
+    e.preventDefault();
+    if (!quantitySold) return;
+    setSubmitting(true);
+    try {
+      const q = parseInt(quantitySold);
+      const p = parseFloat(pricePerBird) || 0;
+      await insertRecord('flock_sales', {
+        date:           saleDate,
+        source_type:    sourceType,
+        batch_id:       sourceType === 'batch' ? (saleBatchId || null) : null,
+        pen_id:         sourceType === 'pen'   ? (salePenId   || null) : null,
+        quantity_sold:  q,
+        price_per_bird: p || null,
+        buyer_name:     buyerName.trim() || null,
+        total_revenue:  (q * p) || null,
+        payment_method: paymentMethod,
+      });
+      setShowSaleModal(false);
+      setQuantitySold(''); setPricePerBird(''); setBuyerName(''); setSaleBatchId(''); setSalePenId('');
+    } finally { setSubmitting(false); }
+  };
+
+  const canEdit = role === 'admin' || role === 'manager';
+
+  const kpis = [
+    { label: 'Batches',        value: batches.length,         icon: ClipboardList, color: 'bg-blue-50 text-blue-600'   },
+    { label: 'Birds Growing',  value: fmt(totalBirdsGrowing), icon: Bird,          color: 'bg-amber-50 text-amber-600' },
+    { label: 'Birds Sold',     value: fmt(totalSold),         icon: TrendingDown,  color: 'bg-red-50 text-red-600'     },
+    { label: 'Bird Revenue',   value: currency(totalRevenue), icon: DollarSign,    color: 'bg-emerald-50 text-primary' },
+  ];
+
+  // ============================================================================
+  return (
+    <div className="p-6 max-w-7xl mx-auto space-y-6">
+
+      {/* ── Page Header — only New Batch here ───────────────────────────── */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-border-farm pb-4">
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 bg-amber-100 text-amber-700 rounded-xl shadow-sm">
+            <Egg className="w-6 h-6" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-serif font-bold text-dark-green">Flock Lifecycle</h1>
+            <p className="text-xs text-text-muted font-sans mt-0.5">
+              Track chicks from arrival through the grower stage to spent layer sale / culling
+            </p>
+          </div>
+        </div>
+        {canEdit && (
+          <button
+            onClick={() => setShowBatchModal(true)}
+            className="flex items-center gap-1.5 bg-dark-green hover:bg-emerald-900 text-white font-bold px-4 py-2.5 rounded-xl text-xs shadow-sm transition-all">
+            <Plus className="w-4 h-4" /> New Batch
+          </button>
+        )}
+      </div>
+
+      {/* ── KPI strip ─────────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {kpis.map(k => (
+          <div key={k.label} className="bg-white p-5 rounded-2xl border border-border-farm shadow-sm flex items-center justify-between">
+            <div>
+              <span className="text-[10px] text-text-muted font-black uppercase tracking-wider block">{k.label}</span>
+              <div className="text-2xl font-serif font-black text-dark-green mt-1">{k.value}</div>
+            </div>
+            <div className={`p-3 rounded-xl ${k.color}`}><k.icon className="w-5 h-5" /></div>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Tab selector ──────────────────────────────────────────────────── */}
+      <div className="flex gap-1 bg-bg-farm p-1 rounded-xl border border-border-farm w-fit">
+        {TABS.map(t => (
+          <button key={t.id} onClick={() => setActiveTab(t.id)}
+            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold transition-all ${
+              activeTab === t.id
+                ? 'bg-white text-dark-green shadow-sm border border-border-farm'
+                : 'text-text-muted hover:text-dark-green'
+            }`}>
+            <t.icon className="w-3.5 h-3.5" />
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ══════════════════════════════════════════════════════════════════ */}
+      {/*  TAB 1 — BATCH REGISTRY                                          */}
+      {/*  Compact summary table, click row to expand grower log history   */}
+      {/* ══════════════════════════════════════════════════════════════════ */}
+      {activeTab === 'batches' && (
+        <div className="bg-white rounded-2xl border border-border-farm shadow-sm overflow-hidden">
+          {/* Tab-level action bar */}
+          <div className="flex items-center justify-between p-4 border-b border-border-farm">
+            <h3 className="font-serif font-bold text-dark-green text-sm">
+              All Batches
+              <span className="ml-2 text-[10px] font-sans font-bold text-text-muted bg-bg-farm px-2 py-0.5 rounded-full border border-border-farm">
+                {batches.length}
+              </span>
+            </h3>
+            {canEdit && (
+              <button onClick={() => setShowBatchModal(true)}
+                className="flex items-center gap-1 text-primary hover:text-emerald-700 text-xs font-bold transition-colors">
+                <Plus className="w-3.5 h-3.5" /> New Batch
+              </button>
+            )}
+          </div>
+
+          {batches.length === 0 ? (
+            <div className="p-12 text-center space-y-2">
+              <Egg className="w-10 h-10 text-border-farm mx-auto" />
+              <p className="text-sm font-bold text-text-muted">No batches registered yet</p>
+              <p className="text-xs text-text-muted">Click <strong>New Batch</strong> to register the first chick arrival.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs font-sans">
+                <thead className="bg-bg-farm text-[10px] text-text-muted uppercase font-black border-b border-border-farm">
+                  <tr>
+                    <th className="p-3 w-6" />
+                    <th className="p-3 text-left">Batch Name</th>
+                    <th className="p-3 text-center">Arrived</th>
+                    <th className="p-3 text-center">Qty</th>
+                    <th className="p-3 text-left hidden sm:table-cell">Breed</th>
+                    <th className="p-3 text-left hidden md:table-cell">Vendor</th>
+                    <th className="p-3 text-center hidden lg:table-cell">Cost / Bird</th>
+                    <th className="p-3 text-center hidden lg:table-cell">Exp. Lay Date</th>
+                    <th className="p-3 text-center">Status</th>
+                    {canEdit && <th className="p-3 text-center">Action</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {batches.map(batch => {
+                    const logs   = growerLogs
+                      .filter(l => l.batch_id === batch.id)
+                      .sort((a, b) => b.date.localeCompare(a.date));
+                    const isOpen = expandedBatch === batch.id;
+
+                    return (
+                      <React.Fragment key={batch.id}>
+                        {/* Summary row */}
+                        <tr
+                          className="border-b border-border-farm hover:bg-amber-50/30 transition-colors cursor-pointer"
+                          onClick={() => setExpandedBatch(isOpen ? null : batch.id)}>
+                          <td className="p-3 text-text-muted">
+                            {isOpen
+                              ? <ChevronUp className="w-3.5 h-3.5" />
+                              : <ChevronDown className="w-3.5 h-3.5" />}
+                          </td>
+                          <td className="p-3 font-serif font-bold text-dark-green">{batch.batch_name}</td>
+                          <td className="p-3 text-center font-semibold">{batch.arrival_date}</td>
+                          <td className="p-3 text-center font-bold text-dark-green">{fmt(batch.quantity_arrived)}</td>
+                          <td className="p-3 text-text-muted hidden sm:table-cell">{batch.breed || '—'}</td>
+                          <td className="p-3 text-text-muted hidden md:table-cell">{batch.vendor || '—'}</td>
+                          <td className="p-3 text-center hidden lg:table-cell">
+                            {batch.cost_per_bird ? currency(batch.cost_per_bird) : '—'}
+                          </td>
+                          <td className="p-3 text-center hidden lg:table-cell font-semibold">
+                            {batch.expected_lay_date || '—'}
+                          </td>
+                          <td className="p-3 text-center"><StatusBadge status={batch.status} /></td>
+                          {canEdit && (
+                            <td className="p-3 text-center" onClick={e => e.stopPropagation()}>
+                              <div className="flex items-center justify-center gap-2">
+                                {batch.status === 'growing' && (
+                                  <button
+                                    onClick={() => handleGraduate(batch)}
+                                    title="Graduate to Layers"
+                                    className="flex items-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-2 py-1 rounded-lg text-[9px] transition-all shadow-sm">
+                                    <Award className="w-2.5 h-2.5" />
+                                    Graduate <ArrowRight className="w-2.5 h-2.5" />
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => deleteRecord('batches', batch.id)}
+                                  className="text-red-400 hover:text-red-600 p-1 transition-colors">
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                          )}
+                        </tr>
+
+                        {/* Expanded grower log history */}
+                        {isOpen && (
+                          <tr className="border-b border-border-farm">
+                            <td colSpan={canEdit ? 10 : 9} className="p-0 bg-bg-farm">
+                              <div className="px-6 py-4 space-y-3">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[10px] font-black text-text-muted uppercase tracking-wider">
+                                    Growth Log History — {batch.batch_name}
+                                  </span>
+                                  <span className="text-[10px] text-text-muted font-semibold">
+                                    {logs.length} {logs.length === 1 ? 'entry' : 'entries'}
+                                  </span>
+                                </div>
+
+                                {logs.length === 0 ? (
+                                  <p className="text-xs text-text-muted font-semibold italic py-2">
+                                    No growth logs yet — switch to the <strong>Grower Tracker</strong> tab to record weekly updates.
+                                  </p>
+                                ) : (
+                                  <div className="overflow-x-auto rounded-xl border border-border-farm bg-white">
+                                    <table className="w-full text-xs font-sans">
+                                      <thead className="bg-bg-farm text-[10px] text-text-muted uppercase font-black border-b border-border-farm">
+                                        <tr>
+                                          <th className="px-3 py-2 text-left">Date</th>
+                                          <th className="px-3 py-2 text-center">Days Old</th>
+                                          <th className="px-3 py-2 text-center">Headcount</th>
+                                          <th className="px-3 py-2 text-center">Avg Weight</th>
+                                          <th className="px-3 py-2 text-center">Feed (kg)</th>
+                                          <th className="px-3 py-2 text-center">Mortality</th>
+                                          <th className="px-3 py-2 text-left">Health Notes</th>
+                                          {canEdit && <th className="px-3 py-2" />}
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-border-farm">
+                                        {logs.map((lg, i) => {
+                                          const dOld = daysBetween(batch.arrival_date, lg.date);
+                                          return (
+                                            <tr key={lg.id} className={i % 2 === 0 ? 'bg-white' : 'bg-bg-farm/40'}>
+                                              <td className="px-3 py-2 font-semibold">{lg.date}</td>
+                                              <td className="px-3 py-2 text-center text-text-muted font-bold">{dOld}d</td>
+                                              <td className="px-3 py-2 text-center font-bold text-dark-green">{fmt(lg.headcount)}</td>
+                                              <td className="px-3 py-2 text-center">{lg.avg_weight    != null ? `${lg.avg_weight} kg`    : '—'}</td>
+                                              <td className="px-3 py-2 text-center">{lg.feed_consumed != null ? `${lg.feed_consumed} kg` : '—'}</td>
+                                              <td className="px-3 py-2 text-center font-bold text-red-500">{lg.mortality ?? '—'}</td>
+                                              <td className="px-3 py-2 text-text-muted max-w-[200px] truncate">{lg.health_notes || '—'}</td>
+                                              {canEdit && (
+                                                <td className="px-3 py-2 text-right">
+                                                  <button onClick={() => deleteRecord('grower_logs', lg.id)}
+                                                    className="text-red-400 hover:text-red-600 p-1 transition-colors">
+                                                    <Trash2 className="w-3 h-3" />
+                                                  </button>
+                                                </td>
+                                              )}
+                                            </tr>
+                                          );
+                                        })}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════ */}
+      {/*  TAB 2 — GROWER TRACKER  (weekly inline grid)                    */}
+      {/* ══════════════════════════════════════════════════════════════════ */}
+      {activeTab === 'grower' && (
+        <div className="space-y-4">
+          {/* Date picker control bar */}
+          <div className="bg-white rounded-2xl border border-border-farm shadow-sm p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-amber-100 text-amber-700 rounded-lg">
+                <Calendar className="w-4 h-4" />
+              </div>
+              <div>
+                <p className="text-[10px] font-black text-text-muted uppercase tracking-wider">Weekly Recording Date</p>
+                <p className="text-[10px] text-text-muted mt-0.5 font-semibold">
+                  All rows save to this date &middot; Existing data is pre-filled automatically
+                </p>
+              </div>
+              <DatePicker
+                value={growerDate}
+                onChange={(d) => { setGrowerDate(d); setGrowerGrid({}); setGridSaved(false); }}
+              />
+            </div>
+            {canEdit && (
+              <button
+                onClick={handleSaveAllGrowth}
+                disabled={gridSaving || growingBatches.length === 0}
+                className={`flex items-center gap-2 font-bold px-5 py-2.5 rounded-xl text-xs shadow-sm transition-all whitespace-nowrap
+                  ${gridSaved ? 'bg-emerald-600 text-white' : 'bg-dark-green hover:bg-emerald-900 text-white'}
+                  disabled:opacity-50 disabled:cursor-not-allowed`}>
+                <Save className="w-4 h-4" />
+                {gridSaving ? 'Saving...' : gridSaved ? '\u2713 Saved!' : 'Save All Records'}
+              </button>
+            )}
+          </div>
+
+          {/* Grid table */}
+          {growingBatches.length === 0 ? (
+            <div className="bg-white rounded-2xl border border-border-farm p-12 text-center space-y-2 shadow-sm">
+              <Bird className="w-10 h-10 text-border-farm mx-auto" />
+              <p className="text-sm font-bold text-text-muted">No active growing batches</p>
+              <p className="text-xs text-text-muted">
+                Register a batch with status <strong>growing</strong> to track weekly progress here.
+              </p>
+            </div>
+          ) : (
+            <div className="bg-white rounded-2xl border border-border-farm shadow-sm overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full font-sans" style={{ minWidth: '820px' }}>
+                  <thead className="bg-bg-farm border-b border-border-farm">
+                    <tr>
+                      <th className="p-3 text-left text-[10px] text-text-muted uppercase font-black tracking-wider" style={{ minWidth: 170 }}>
+                        Batch
+                      </th>
+                      <th className="p-3 text-center text-[10px] text-text-muted uppercase font-black tracking-wider" style={{ width: 80 }}>
+                        Days Old
+                      </th>
+                      <th className="p-3 text-center text-[10px] text-text-muted uppercase font-black tracking-wider" style={{ minWidth: 130 }}>
+                        Progress
+                      </th>
+                      <th className="p-3 text-center text-[10px] text-text-muted uppercase font-black tracking-wider" style={{ width: 110 }}>
+                        Headcount *
+                      </th>
+                      <th className="p-3 text-center text-[10px] text-text-muted uppercase font-black tracking-wider" style={{ width: 100 }}>
+                        Avg Wt (kg)
+                      </th>
+                      <th className="p-3 text-center text-[10px] text-text-muted uppercase font-black tracking-wider" style={{ width: 100 }}>
+                        Feed (kg)
+                      </th>
+                      <th className="p-3 text-center text-[10px] text-text-muted uppercase font-black tracking-wider" style={{ width: 90 }}>
+                        Mortality
+                      </th>
+                      <th className="p-3 text-left text-[10px] text-text-muted uppercase font-black tracking-wider">
+                        Health Notes
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border-farm">
+                    {growingBatches.map((batch, idx) => {
+                      const row  = getGridRow(batch.id);
+                      const prog = weekProgress(batch, growerDate);
+                      return (
+                        <tr key={batch.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-amber-50/20'}>
+                          {/* Batch name */}
+                          <td className="p-3">
+                            <div className="font-serif font-bold text-dark-green text-xs leading-tight">{batch.batch_name}</div>
+                            {batch.breed && (
+                              <div className="text-[10px] text-text-muted font-semibold mt-0.5">{batch.breed}</div>
+                            )}
+                          </td>
+
+                          {/* Days Old — auto-calculated, never editable */}
+                          <td className="p-3 text-center">
+                            <span className="text-sm font-serif font-black text-dark-green">{prog.daysOld}</span>
+                            <span className="text-[10px] text-text-muted font-bold block leading-none">days</span>
+                          </td>
+
+                          {/* Progress bar */}
+                          <td className="p-3">
+                            {prog.totalWeeks ? (
+                              <div className="space-y-1">
+                                <div className="flex justify-between text-[9px] font-black text-text-muted">
+                                  <span>Wk {prog.weekOld}</span>
+                                  <span>of ~{prog.totalWeeks}</span>
+                                </div>
+                                <div className="h-2 bg-border-farm rounded-full overflow-hidden">
+                                  <div
+                                    className={`h-full rounded-full transition-all duration-500 ${
+                                      prog.pct >= 90 ? 'bg-emerald-500'
+                                      : prog.pct >= 60 ? 'bg-amber-400'
+                                      : 'bg-blue-400'
+                                    }`}
+                                    style={{ width: `${prog.pct}%` }}
+                                  />
+                                </div>
+                                <div className="text-[9px] text-center text-text-muted font-bold">{prog.pct}% to lay</div>
+                              </div>
+                            ) : (
+                              <span className="text-[10px] text-text-muted italic">No lay date set</span>
+                            )}
+                          </td>
+
+                          {/* Headcount */}
+                          <td className="p-2">
+                            <GridCell
+                              value={row.headcount}
+                              onChange={v => updateGridCell(batch.id, 'headcount', v)}
+                              placeholder="count"
+                            />
+                          </td>
+
+                          {/* Avg Weight */}
+                          <td className="p-2">
+                            <GridCell
+                              value={row.avg_weight}
+                              onChange={v => updateGridCell(batch.id, 'avg_weight', v)}
+                              placeholder="0.00"
+                            />
+                          </td>
+
+                          {/* Feed Consumed */}
+                          <td className="p-2">
+                            <GridCell
+                              value={row.feed_consumed}
+                              onChange={v => updateGridCell(batch.id, 'feed_consumed', v)}
+                              placeholder="0.0"
+                            />
+                          </td>
+
+                          {/* Mortality */}
+                          <td className="p-2">
+                            <GridCell
+                              value={row.mortality}
+                              onChange={v => updateGridCell(batch.id, 'mortality', v)}
+                              placeholder="0"
+                              cellClass={parseInt(row.mortality) > 0 ? 'text-red-600 border-red-200 bg-red-50' : ''}
+                            />
+                          </td>
+
+                          {/* Health Notes */}
+                          <td className="p-2">
+                            <input
+                              type="text"
+                              value={row.health_notes}
+                              onChange={e => updateGridCell(batch.id, 'health_notes', e.target.value)}
+                              placeholder="Notes…"
+                              className="w-full text-xs font-semibold bg-white border border-border-farm rounded-lg px-2 py-1.5
+                                focus:ring-2 focus:ring-accent outline-none transition-all min-h-[36px] hover:border-accent/60"
+                            />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Grid footer */}
+              <div className="px-4 py-2.5 bg-bg-farm border-t border-border-farm flex items-center justify-between gap-3">
+                <p className="text-[10px] text-text-muted font-semibold">
+                  * Headcount required to save a row &nbsp;&middot;&nbsp; Tab through cells for fast entry
+                </p>
+                {canEdit && (
+                  <button
+                    onClick={handleSaveAllGrowth}
+                    disabled={gridSaving || growingBatches.length === 0}
+                    className={`flex items-center gap-1.5 font-bold px-4 py-2 rounded-xl text-xs shadow-sm transition-all whitespace-nowrap
+                      ${gridSaved ? 'bg-emerald-600 text-white' : 'bg-dark-green hover:bg-emerald-900 text-white'}
+                      disabled:opacity-50`}>
+                    <Save className="w-3.5 h-3.5" />
+                    {gridSaving ? 'Saving...' : gridSaved ? '\u2713 Saved!' : 'Save All Records'}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════ */}
+      {/*  TAB 3 — FLOCK SALES / CULLING  (unchanged from previous build)  */}
+      {/* ══════════════════════════════════════════════════════════════════ */}
+      {activeTab === 'sales' && (
+        <div className="bg-white rounded-2xl border border-border-farm shadow-sm overflow-hidden">
+          <div className="p-4 border-b border-border-farm flex items-center justify-between">
+            <div>
+              <h3 className="font-serif font-bold text-dark-green text-sm">Flock Sales &amp; Culling Log</h3>
+              <p className="text-[10px] text-text-muted mt-0.5">
+                Pen-based sales auto-deduct from the Census Matrix for the recorded date
+              </p>
+            </div>
+            {canEdit && (
+              <button onClick={() => setShowSaleModal(true)}
+                className="flex items-center gap-1.5 bg-red-600 hover:bg-red-700 text-white font-bold px-3 py-1.5 rounded-lg text-xs shadow-sm">
+                <Plus className="w-3.5 h-3.5" /> Record Sale
+              </button>
+            )}
+          </div>
+
+          {/* Revenue strip */}
+          <div className="grid grid-cols-3 divide-x divide-border-farm border-b border-border-farm text-center">
+            {[
+              { label: 'Total Sales', value: flockSales.length },
+              { label: 'Birds Sold',  value: fmt(totalSold) },
+              { label: 'Revenue',     value: currency(totalRevenue), green: true },
+            ].map(s => (
+              <div key={s.label} className="py-3 px-4">
+                <div className="text-[10px] text-text-muted font-black uppercase">{s.label}</div>
+                <div className={`text-base font-serif font-black ${s.green ? 'text-primary' : 'text-dark-green'}`}>{s.value}</div>
+              </div>
+            ))}
+          </div>
+
+          {flockSales.length === 0 ? (
+            <div className="p-10 text-center text-sm text-text-muted font-semibold">
+              No flock sales recorded yet. Click <strong>Record Sale</strong> to log a transaction.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs font-sans">
+                <thead className="bg-bg-farm text-[10px] text-text-muted uppercase font-black border-b border-border-farm">
+                  <tr>
+                    <th className="p-3 text-left">Date</th>
+                    <th className="p-3 text-left">Source</th>
+                    <th className="p-3 text-center">Qty Sold</th>
+                    <th className="p-3 text-center">Price / Bird</th>
+                    <th className="p-3 text-center">Revenue</th>
+                    <th className="p-3 text-left">Buyer</th>
+                    <th className="p-3 text-left">Payment</th>
+                    {canEdit && <th className="p-3" />}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border-farm">
+                  {[...flockSales].sort((a, b) => b.date.localeCompare(a.date)).map(fs => {
+                    const srcName = fs.source_type === 'pen'
+                      ? (pens.find(p => p.id === fs.pen_id)?.name ?? 'Pen')
+                      : (batches.find(b => b.id === fs.batch_id)?.batch_name ?? 'Batch');
+                    return (
+                      <tr key={fs.id} className="hover:bg-red-50/30 transition-colors">
+                        <td className="p-3 font-semibold">{fs.date}</td>
+                        <td className="p-3">
+                          <div className="flex items-center gap-1.5">
+                            <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full uppercase ${
+                              fs.source_type === 'pen' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'
+                            }`}>{fs.source_type}</span>
+                            <span className="font-bold text-dark-green">{srcName}</span>
+                          </div>
+                        </td>
+                        <td className="p-3 text-center font-bold text-red-600">{fmt(fs.quantity_sold)}</td>
+                        <td className="p-3 text-center">{fs.price_per_bird ? currency(fs.price_per_bird) : '—'}</td>
+                        <td className="p-3 text-center font-bold text-primary">{fs.total_revenue ? currency(fs.total_revenue) : '—'}</td>
+                        <td className="p-3 text-text-muted">{fs.buyer_name || '—'}</td>
+                        <td className="p-3">{fs.payment_method || '—'}</td>
+                        {canEdit && (
+                          <td className="p-3 text-right">
+                            <button onClick={() => deleteRecord('flock_sales', fs.id)}
+                              className="text-red-400 hover:text-red-600 p-1 transition-colors">
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════ */}
+      {/*  MODALS                                                           */}
+      {/* ══════════════════════════════════════════════════════════════════ */}
+
+      {/* Register New Batch */}
+      {showBatchModal && (
+        <Modal title="Register New Chick Batch" onClose={() => setShowBatchModal(false)}>
+          <form onSubmit={handleAddBatch} className="space-y-4 font-sans text-xs">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <Field label="Batch Name *">
+                  <input type="text" value={batchName} onChange={e => setBatchName(e.target.value)}
+                    className={inputCls} placeholder="e.g. Batch B'26 — Aug Arrival" required />
+                </Field>
+              </div>
+              <Field label="Arrival Date *">
+                <DatePicker value={arrivalDate} onChange={setArrivalDate} />
+              </Field>
+              <Field label="Quantity Arrived *">
+                <input type="number" min="1" value={qty} onChange={e => setQty(e.target.value)}
+                  className={inputCls} placeholder="500" required onFocus={e => e.target.select()} />
+              </Field>
+              <Field label="Vendor / Hatchery">
+                <input type="text" value={vendor} onChange={e => setVendor(e.target.value)}
+                  className={inputCls} placeholder="e.g. Prime Hatchery Ltd" />
+              </Field>
+              <Field label="Breed">
+                <input type="text" value={breed} onChange={e => setBreed(e.target.value)}
+                  className={inputCls} placeholder="e.g. ISA Brown" />
+              </Field>
+              <Field label="Cost per Bird (&#x20a6;)">
+                <input type="number" min="0" value={costPerBird} onChange={e => setCostPerBird(e.target.value)}
+                  className={inputCls} placeholder="650" onFocus={e => e.target.select()} />
+              </Field>
+              <Field label="Expected Lay Date">
+                <DatePicker value={expectedLay} onChange={setExpectedLay} />
+              </Field>
+            </div>
+            <div className="flex gap-2 pt-1">
+              <button type="button" onClick={() => setShowBatchModal(false)}
+                className="flex-1 py-2.5 bg-bg-farm text-text-primary font-bold text-xs rounded-xl border border-border-farm">
+                Cancel
+              </button>
+              <button type="submit" disabled={submitting}
+                className="flex-1 py-2.5 bg-dark-green text-white font-bold text-xs rounded-xl hover:bg-emerald-900 shadow-sm transition-all">
+                {submitting ? 'Saving...' : 'Register Batch'}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Record Flock Sale */}
+      {showSaleModal && (
+        <Modal title="Record Flock Sale / Culling" onClose={() => setShowSaleModal(false)}>
+          <form onSubmit={handleAddFlockSale} className="space-y-4 font-sans text-xs">
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Sale Date *">
+                <DatePicker value={saleDate} onChange={setSaleDate} />
+              </Field>
+              <Field label="Source Type *">
+                <select value={sourceType} onChange={e => setSourceType(e.target.value)} className={selectCls}>
+                  <option value="pen">Pen (deducts from Census)</option>
+                  <option value="batch">Batch / Grower</option>
+                </select>
+              </Field>
+
+              {sourceType === 'pen' ? (
+                <div className="col-span-2">
+                  <Field label="Source Pen *">
+                    <select value={salePenId} onChange={e => setSalePenId(e.target.value)} className={selectCls} required>
+                      <option value="">— Select pen —</option>
+                      {pens.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                  </Field>
+                </div>
+              ) : (
+                <div className="col-span-2">
+                  <Field label="Source Batch *">
+                    <select value={saleBatchId} onChange={e => setSaleBatchId(e.target.value)} className={selectCls} required>
+                      <option value="">— Select batch —</option>
+                      {batches.map(b => <option key={b.id} value={b.id}>{b.batch_name}</option>)}
+                    </select>
+                  </Field>
+                </div>
+              )}
+
+              <Field label="Quantity Sold *">
+                <input type="number" min="1" value={quantitySold} onChange={e => setQuantitySold(e.target.value)}
+                  className={inputCls} placeholder="50" required onFocus={e => e.target.select()} />
+              </Field>
+              <Field label="Price per Bird (&#x20a6;)">
+                <input type="number" min="0" step="0.01" value={pricePerBird} onChange={e => setPricePerBird(e.target.value)}
+                  className={inputCls} placeholder="2500" onFocus={e => e.target.select()} />
+              </Field>
+
+              {quantitySold && pricePerBird && (
+                <div className="col-span-2 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 flex justify-between items-center">
+                  <span className="text-xs font-bold text-dark-green">Calculated Revenue</span>
+                  <span className="text-sm font-serif font-black text-primary">
+                    {currency(parseFloat(quantitySold || 0) * parseFloat(pricePerBird || 0))}
+                  </span>
+                </div>
+              )}
+
+              <Field label="Buyer Name">
+                <input type="text" value={buyerName} onChange={e => setBuyerName(e.target.value)}
+                  className={inputCls} placeholder="e.g. Alhaji Musa" />
+              </Field>
+              <Field label="Payment Method">
+                <select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)} className={selectCls}>
+                  <option>Cash</option>
+                  <option>Transfer</option>
+                  <option>Cheque</option>
+                  <option>Credit (Debt)</option>
+                </select>
+              </Field>
+            </div>
+
+            {sourceType === 'pen' && (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-[10px] text-amber-800 font-semibold">
+                Pen-based sales automatically deduct sold birds from the Census Matrix for the sale date.
+              </div>
+            )}
+
+            <div className="flex gap-2 pt-1">
+              <button type="button" onClick={() => setShowSaleModal(false)}
+                className="flex-1 py-2.5 bg-bg-farm text-text-primary font-bold text-xs rounded-xl border border-border-farm">
+                Cancel
+              </button>
+              <button type="submit" disabled={submitting}
+                className="flex-1 py-2.5 bg-red-600 text-white font-bold text-xs rounded-xl hover:bg-red-700 shadow-sm transition-all">
+                {submitting ? 'Saving...' : 'Record Sale / Cull'}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}

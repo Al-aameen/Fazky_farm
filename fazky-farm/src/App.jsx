@@ -18,6 +18,7 @@ import Workers from './pages/Workers';
 import Settings from './pages/Settings';
 import FeedWatch from './pages/FeedWatch';
 import FlockHealth from './pages/FlockHealth';
+import FlockLifecycle from './pages/FlockLifecycle';
 import CustomerOrders from './pages/CustomerOrders';
 
 function AppContent() {
@@ -112,6 +113,12 @@ function AppContent() {
         return (
           <ProtectedRoute allowedRoles={['admin', 'manager', 'staff']}>
             <FlockHealth />
+          </ProtectedRoute>
+        );
+      case 'flocklifecycle':
+        return (
+          <ProtectedRoute allowedRoles={['admin', 'manager']}>
+            <FlockLifecycle />
           </ProtectedRoute>
         );
       case 'feedwatch':

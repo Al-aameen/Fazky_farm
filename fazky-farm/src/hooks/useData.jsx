@@ -84,7 +84,11 @@ const SEED_DATA = {
   maize_records: historicalData.maize_records || [],
   feed_production: [],
   off_pays: [],
-  feed_inventory_log: []
+  feed_inventory_log: [],
+  // Flock Lifecycle (Part 4)
+  batches: [],
+  grower_logs: [],
+  flock_sales: []
 };
 
 // Auto-fill Census Counts for all pens to match starting census of mid-2026
@@ -360,6 +364,10 @@ export function DataProvider({ children }) {
     if (table === 'feed_production') {
       await handleFeedProductionTrigger(newRecord);
     }
+    // Trigger flock sale census deduction (mirrors SQL trigger)
+    if (table === 'flock_sales') {
+      await handleFlockSaleTrigger(newRecord);
+    }
   };
 
   const updateRecord = async (table, record) => {
@@ -516,6 +524,37 @@ export function DataProvider({ children }) {
         setData(prev => ({ ...prev, feed_inventory: updatedInventory }));
       }
     }
+  };
+
+  // Flock Sales: auto-deduct sold birds from census_counts (mirrors fn_deduct_sold_birds_from_census)
+  const handleFlockSaleTrigger = async (sale) => {
+    if (sale.source_type !== 'pen' || !sale.pen_id || !sale.quantity_sold) return;
+
+    let remaining = parseInt(sale.quantity_sold) || 0;
+    const saleDate = sale.date;
+
+    const censusList = [...(data.census_counts || [])]
+      .filter(c => c.pen_id === sale.pen_id && c.date === saleDate && c.bird_count > 0)
+      .sort((a, b) => a.slot_number - b.slot_number);
+
+    if (censusList.length === 0 || remaining === 0) return;
+
+    const updatedCounts = [...(data.census_counts || [])];
+    for (let i = 0; i < censusList.length; i++) {
+      if (remaining <= 0) break;
+      const item = censusList[i];
+      const itemIdx = updatedCounts.findIndex(c => c.id === item.id);
+      if (item.bird_count >= remaining) {
+        updatedCounts[itemIdx] = { ...item, bird_count: item.bird_count - remaining };
+        await putCachedItem('census_counts', updatedCounts[itemIdx]);
+        remaining = 0;
+      } else {
+        remaining -= item.bird_count;
+        updatedCounts[itemIdx] = { ...item, bird_count: 0 };
+        await putCachedItem('census_counts', updatedCounts[itemIdx]);
+      }
+    }
+    setData(prev => ({ ...prev, census_counts: updatedCounts }));
   };
 
   // Add Restock from Feed Production (Section 13: "When feed production is recorded, maize KG and bag quantities are automatically added")
