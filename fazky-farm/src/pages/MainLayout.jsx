@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../hooks/useData';
 import NetworkStatus from '../components/NetworkStatus';
@@ -21,7 +21,10 @@ import {
   Activity, 
   ShoppingCart, 
   Egg,
-  WifiOff
+  WifiOff,
+  Sun,
+  Moon,
+  FolderKanban
 } from 'lucide-react';
 
 export default function MainLayout({ activePage, setActivePage, children }) {
@@ -29,22 +32,42 @@ export default function MainLayout({ activePage, setActivePage, children }) {
   const { isOnline } = useData();
   const [collapsed, setCollapsed] = useState(false);
 
+  // Theme Mode State (persisted in localStorage)
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    return localStorage.getItem('fazky_theme') === 'dark';
+  });
+
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('fazky_theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('fazky_theme', 'light');
+    }
+  }, [isDarkMode]);
+
+  const toggleTheme = () => {
+    setIsDarkMode(prev => !prev);
+  };
+
   // Define navigation items with icon, label, id, and allowed roles
   const navItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['admin', 'manager'] },
-    { id: 'census', label: 'Bird Census', icon: Grid, roles: ['admin', 'manager', 'staff'] },
-    { id: 'production', label: 'Production Log', icon: ClipboardList, roles: ['admin', 'manager', 'staff'] },
-    { id: 'flockhealth',    label: 'Flock Health',     icon: Activity,    roles: ['admin', 'manager', 'staff'] },
-    { id: 'flocklifecycle', label: 'Flock Lifecycle',  icon: Egg,         roles: ['admin', 'manager'] },
-    { id: 'feedwatch',      label: 'Feed & Stock',     icon: Package,     roles: ['admin', 'manager', 'staff'] },
-    { id: 'sales', label: 'Sales Log', icon: CircleDollarSign, roles: ['admin', 'manager'] },
-    { id: 'customerorders', label: 'Orders & CRM', icon: ShoppingCart, roles: ['admin', 'manager'] },
-    { id: 'expenses', label: 'Daily Expenses', icon: Receipt, roles: ['admin', 'manager'] },
-    { id: 'procurement', label: 'Procurement', icon: Hammer, roles: ['admin', 'manager'] },
-    { id: 'loans', label: 'Loan Ledger', icon: PiggyBank, roles: ['admin'] },
-    { id: 'payroll', label: 'Payroll', icon: FileText, roles: ['admin'] },
-    { id: 'workers', label: 'Workers', icon: Users, roles: ['admin'] },
-    { id: 'settings', label: 'Settings', icon: SettingsIcon, roles: ['admin', 'manager'] },
+    { id: 'dashboard',      label: 'Dashboard',        icon: LayoutDashboard, roles: ['admin', 'manager'] },
+    { id: 'census',         label: 'Bird Census',      icon: Grid,            roles: ['admin', 'manager', 'staff'] },
+    { id: 'production',     label: 'Production Log',   icon: ClipboardList,   roles: ['admin', 'manager', 'staff'] },
+    { id: 'flockhealth',    label: 'Flock Health',     icon: Activity,        roles: ['admin', 'manager', 'staff'] },
+    { id: 'flocklifecycle', label: 'Flock Lifecycle',  icon: Egg,             roles: ['admin', 'manager'] },
+    { id: 'feedwatch',      label: 'Feed & Stock',     icon: Package,         roles: ['admin', 'manager', 'staff'] },
+    { id: 'sales',          label: 'Sales Log',        icon: CircleDollarSign, roles: ['admin', 'manager'] },
+    { id: 'customerorders', label: 'Orders & CRM',     icon: ShoppingCart,    roles: ['admin', 'manager'] },
+    { id: 'expenses',       label: 'Daily Expenses',   icon: Receipt,         roles: ['admin', 'manager'] },
+    { id: 'farmprojects',   label: 'Farm Projects',    icon: Hammer,          roles: ['admin', 'manager'] },
+    { id: 'procurement',    label: 'Procurement',      icon: FolderKanban,    roles: ['admin', 'manager'] },
+    { id: 'loans',          label: 'Loan Ledger',      icon: PiggyBank,       roles: ['admin'] },
+    { id: 'payroll',        label: 'Payroll',          icon: FileText,        roles: ['admin'] },
+    { id: 'workers',        label: 'Workers',          icon: Users,           roles: ['admin'] },
+    { id: 'settings',       label: 'Settings',         icon: SettingsIcon,    roles: ['admin', 'manager'] },
   ];
 
   // Filter items by current user's role
@@ -79,7 +102,7 @@ export default function MainLayout({ activePage, setActivePage, children }) {
           </div>
 
           {/* Navigation Links */}
-          <nav className="p-3 space-y-1 mt-4">
+          <nav className="p-3 space-y-1 mt-2">
             {visibleNavItems.map((item) => {
               const Icon = item.icon;
               const isActive = activePage === item.id;
@@ -87,14 +110,14 @@ export default function MainLayout({ activePage, setActivePage, children }) {
                 <button
                   key={item.id}
                   onClick={() => handleNavClick(item.id)}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-150 ${
+                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-semibold transition-all duration-150 ${
                     isActive
                       ? 'bg-accent text-dark-green font-bold shadow-md'
                       : 'text-light-green hover:bg-white/10 hover:text-white'
                   }`}
                   title={item.label}
                 >
-                  <Icon className="w-5 h-5 shrink-0" />
+                  <Icon className="w-4 h-4 shrink-0" />
                   {!collapsed && <span className="font-sans text-left truncate">{item.label}</span>}
                 </button>
               );
@@ -105,7 +128,7 @@ export default function MainLayout({ activePage, setActivePage, children }) {
         {/* User Info & Logout Panel */}
         <div className="p-3 border-t border-white/10 bg-black/10 shrink-0">
           {!collapsed && (
-            <div className="mb-3 p-2 bg-white/5 rounded-xl flex items-center gap-2.5">
+            <div className="mb-2 p-2 bg-white/5 rounded-xl flex items-center gap-2.5">
               {worker?.avatar ? (
                 <img 
                   src={worker.avatar} 
@@ -128,10 +151,10 @@ export default function MainLayout({ activePage, setActivePage, children }) {
           )}
           <button
             onClick={logout}
-            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-red-accent/90 hover:bg-red-950/20 hover:text-red-400 hover:font-bold transition-all duration-150"
+            className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-xs text-red-accent/90 hover:bg-red-950/20 hover:text-red-400 hover:font-bold transition-all duration-150"
             title="Sign Out"
           >
-            <LogOut className="w-5 h-5 shrink-0" />
+            <LogOut className="w-4 h-4 shrink-0" />
             {!collapsed && <span className="font-sans text-left">Sign Out</span>}
           </button>
         </div>
@@ -162,8 +185,28 @@ export default function MainLayout({ activePage, setActivePage, children }) {
             </h2>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
+            {/* Dark/Light Theme Mode Toggle */}
+            <button
+              onClick={toggleTheme}
+              className="p-2 text-text-primary hover:bg-bg-farm rounded-xl border border-border-farm shadow-sm transition-colors flex items-center gap-1.5 text-xs font-bold"
+              title={isDarkMode ? 'Switch to Light Theme' : 'Switch to Farm Dark Theme'}
+            >
+              {isDarkMode ? (
+                <>
+                  <Sun className="w-4 h-4 text-amber-400" />
+                  <span className="hidden sm:inline">Light</span>
+                </>
+              ) : (
+                <>
+                  <Moon className="w-4 h-4 text-dark-green" />
+                  <span className="hidden sm:inline">Dark</span>
+                </>
+              )}
+            </button>
+
             <NetworkStatus />
+
             {!collapsed && (
               <div className="text-xs text-text-muted font-semibold bg-bg-farm border border-border-farm pl-2 pr-3 py-1 rounded-full flex items-center gap-2 shadow-sm">
                 {worker?.avatar ? (
@@ -175,7 +218,7 @@ export default function MainLayout({ activePage, setActivePage, children }) {
                 ) : (
                   <span className="w-2 h-2 rounded-full bg-primary"></span>
                 )}
-                <span>{worker?.name || user?.email || 'User'}</span>
+                <span>{worker?.name || user?.email?.split('@')[0] || 'User'}</span>
               </div>
             )}
           </div>

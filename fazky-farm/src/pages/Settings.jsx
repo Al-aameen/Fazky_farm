@@ -37,8 +37,9 @@ export default function Settings() {
   const fileInputRef = useRef(null);
 
   // Egg Price State
-  const currentEggPriceObj = (data.egg_price_settings || []).sort((a, b) => new Date(b.effective_date) - new Date(a.effective_date))[0] || { price_per_crate: 4400, effective_date: '2026-01-01' };
+  const currentEggPriceObj = (data.egg_price_settings || []).sort((a, b) => new Date(b.effective_date) - new Date(a.effective_date))[0] || { price_per_crate: 4400, feed_cost_per_bag: 3500, effective_date: '2026-01-01' };
   const [eggPrice, setEggPrice] = useState(currentEggPriceObj.price_per_crate || 4400);
+  const [feedCostPerBag, setFeedCostPerBag] = useState(currentEggPriceObj.feed_cost_per_bag || 3500);
   const [effectiveDate, setEffectiveDate] = useState(currentEggPriceObj.effective_date || new Date().toISOString().split('T')[0]);
   const [savingPrice, setSavingPrice] = useState(false);
   const [priceSuccess, setPriceSuccess] = useState(false);
@@ -86,10 +87,21 @@ export default function Settings() {
       // Save to worker profile in database
       const res = await updateProfile({ avatar: base64 });
       if (res.success) {
-        setAvatarSuccess(`Avatar updated and compressed to ${sizeKB}KB!`);
+        setAvatarSuccess(`✅ Profile photo updated and compressed to ${sizeKB}KB!`);
         setTimeout(() => setAvatarSuccess(''), 4000);
       } else {
-        setAvatarError(res.error || 'Failed to save avatar.');
+        // Specific detection of PostgREST schema cache error for 'avatar' column
+        if (res.error && res.error.includes('avatar')) {
+          setAvatarError(
+            '⚠️ Database Schema Cache Issue: The "avatar" column is not yet visible to the API. ' +
+            'To fix this, go to your Supabase Dashboard → SQL Editor and run:\n\n' +
+            'ALTER TABLE public.workers ADD COLUMN IF NOT EXISTS avatar TEXT;\n' +
+            'NOTIFY pgrst, \'reload schema\';\n\n' +
+            'Then refresh this page and try again.'
+          );
+        } else {
+          setAvatarError(res.error || 'Failed to save avatar. Please try again.');
+        }
       }
     } catch (err) {
       console.error('Avatar upload failed:', err);
@@ -100,6 +112,7 @@ export default function Settings() {
     }
   };
 
+
   // 2. Handle Save Egg Price
   const handleSaveEggPrice = async (e) => {
     e.preventDefault();
@@ -109,6 +122,7 @@ export default function Settings() {
     try {
       const payload = {
         price_per_crate: parseFloat(eggPrice) || 0,
+        feed_cost_per_bag: parseFloat(feedCostPerBag) || 0,
         effective_date: effectiveDate,
         set_by: worker?.id || null
       };
@@ -396,32 +410,55 @@ export default function Settings() {
           )}
 
           {avatarError && (
-            <div className="p-3 bg-red-50 border border-red-200 text-red-accent rounded-xl text-xs font-bold flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{avatarError}</span>
+            <div className="p-4 bg-red-50 border border-red-200 text-red-900 rounded-xl text-xs space-y-2">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-red-accent mt-0.5" />
+                <div className="space-y-2 w-full">
+                  <p className="font-bold">Avatar Upload Failed</p>
+                  {avatarError.includes('avatar') || avatarError.includes('schema') ? (
+                    <>
+                      <p className="text-red-800 leading-relaxed">
+                        The <code className="bg-red-100 px-1 rounded font-mono">avatar</code> column is not yet visible to the database API (PostgREST schema cache). Run the following SQL in your <strong>Supabase Dashboard → SQL Editor</strong>:
+                      </p>
+                      <pre className="bg-red-100 border border-red-300 text-red-900 rounded-lg p-3 text-[11px] font-mono whitespace-pre-wrap overflow-auto select-all">
+{`ALTER TABLE public.workers
+  ADD COLUMN IF NOT EXISTS avatar TEXT,
+  ADD COLUMN IF NOT EXISTS delete_pin TEXT;
+
+NOTIFY pgrst, 'reload schema';`}
+                      </pre>
+                      <p className="text-red-700 text-[11px]">After running the above, refresh this page and try uploading again.</p>
+                    </>
+                  ) : (
+                    <p className="font-semibold">{avatarError}</p>
+                  )}
+                </div>
+              </div>
             </div>
           )}
+
 
           <p className="text-[11px] text-text-muted leading-relaxed">
             Photos are automatically compressed to <strong>≤100KB</strong> using high-performance web workers before saving to ensure fast load times.
           </p>
         </div>
 
-        {/* Card 2: Egg Pricing Card */}
+        {/* Card 2: Farm Pricing Settings */}
         <div className="bg-white p-6 rounded-2xl border border-border-farm shadow-sm space-y-4">
           <div className="flex items-center gap-2 text-dark-green font-serif font-bold text-lg border-b border-border-farm pb-3">
             <CircleDollarSign className="w-5 h-5 text-primary" />
-            <span>Egg Price Settings</span>
+            <span>Farm Pricing Settings</span>
           </div>
 
           <p className="text-xs text-text-muted leading-relaxed">
-            Set the official selling price per crate of eggs used across all Sales Log computations and revenue summaries.
+            These values drive all revenue, cost, and <strong>per-pen profit/loss</strong> calculations across the dashboard and reports.
           </p>
 
           <form onSubmit={handleSaveEggPrice} className="space-y-4">
+            {/* Egg Price */}
             <div>
               <label className="block text-xs font-bold text-text-muted uppercase tracking-wider mb-1">
-                Price Per Crate (₦)
+                🥚 Egg Selling Price — Per Crate (₦)
               </label>
               <input
                 type="number"
@@ -432,11 +469,30 @@ export default function Settings() {
                 className="w-full bg-bg-farm border border-border-farm rounded-xl px-4 py-2.5 text-sm font-semibold focus:ring-2 focus:ring-accent focus:outline-none"
                 required
               />
+              <p className="text-[10px] text-text-muted mt-1">1 crate = 30 eggs. Used in sales revenue calculations.</p>
             </div>
 
+            {/* Feed Cost */}
             <div>
               <label className="block text-xs font-bold text-text-muted uppercase tracking-wider mb-1">
-                Effective Date
+                🌽 Feed Cost — Per 25kg Bag (₦)
+              </label>
+              <input
+                type="number"
+                min="0"
+                step="50"
+                value={feedCostPerBag}
+                onChange={(e) => setFeedCostPerBag(e.target.value)}
+                className="w-full bg-bg-farm border border-border-farm rounded-xl px-4 py-2.5 text-sm font-semibold focus:ring-2 focus:ring-accent focus:outline-none"
+                required
+              />
+              <p className="text-[10px] text-text-muted mt-1">Cost of 1 bag (25kg) of formulated feed. Used in per-pen profit/loss calculations on the dashboard.</p>
+            </div>
+
+            {/* Effective Date */}
+            <div>
+              <label className="block text-xs font-bold text-text-muted uppercase tracking-wider mb-1">
+                Effective From
               </label>
               <input
                 type="date"
@@ -450,7 +506,7 @@ export default function Settings() {
             {priceSuccess && (
               <div className="p-3 bg-emerald-50 border border-emerald-200 text-dark-green rounded-xl text-xs font-bold flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 text-primary" />
-                <span>Egg price updated successfully!</span>
+                <span>Pricing settings saved successfully!</span>
               </div>
             )}
 
@@ -459,7 +515,7 @@ export default function Settings() {
               disabled={savingPrice || !isOnline}
               className="w-full bg-dark-green text-white font-bold py-2.5 rounded-xl text-sm hover:bg-emerald-900 transition-all shadow-sm flex items-center justify-center gap-2 disabled:opacity-50"
             >
-              {savingPrice ? 'Updating...' : 'Save Egg Price Setting'}
+              {savingPrice ? 'Saving...' : 'Save Pricing Settings'}
             </button>
           </form>
         </div>

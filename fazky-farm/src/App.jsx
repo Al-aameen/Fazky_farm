@@ -20,23 +20,31 @@ import FeedWatch from './pages/FeedWatch';
 import FlockHealth from './pages/FlockHealth';
 import FlockLifecycle from './pages/FlockLifecycle';
 import CustomerOrders from './pages/CustomerOrders';
+import FarmProjects from './pages/FarmProjects';
 
 function AppContent() {
   const { user, role, loading } = useAuth();
   
-  // Choose the initial page based on the role
-  const [activePage, setActivePage] = useState('census');
+  // Persist active page in localStorage so page refresh never kicks user back to dashboard
+  const [activePage, setActivePage] = useState(() => {
+    const saved = localStorage.getItem('fazky_active_page');
+    return saved || 'dashboard';
+  });
 
-  // Automatically switch dashboard for Admin/Manager when logging in
+  const handleSetActivePage = (page) => {
+    setActivePage(page);
+    localStorage.setItem('fazky_active_page', page);
+  };
+
+  // If user role is staff, ensure they don't land on admin-only page
   useEffect(() => {
-    if (user && role) {
-      if (role === 'admin' || role === 'manager') {
-        setActivePage('dashboard');
-      } else {
-        setActivePage('census');
+    if (user && role === 'staff') {
+      const staffAllowed = ['census', 'production', 'flockhealth', 'feedwatch'];
+      if (!staffAllowed.includes(activePage)) {
+        handleSetActivePage('census');
       }
     }
-  }, [user, role]);
+  }, [user, role, activePage]);
 
   if (loading) {
     return (
@@ -83,6 +91,12 @@ function AppContent() {
         return (
           <ProtectedRoute allowedRoles={['admin', 'manager']}>
             <ExpensesLog />
+          </ProtectedRoute>
+        );
+      case 'farmprojects':
+        return (
+          <ProtectedRoute allowedRoles={['admin', 'manager']}>
+            <FarmProjects />
           </ProtectedRoute>
         );
       case 'procurement':
@@ -145,7 +159,7 @@ function AppContent() {
   };
 
   return (
-    <MainLayout activePage={activePage} setActivePage={setActivePage}>
+    <MainLayout activePage={activePage} setActivePage={handleSetActivePage}>
       {renderPage()}
     </MainLayout>
   );

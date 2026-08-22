@@ -831,8 +831,8 @@ export default function FlockLifecycle() {
                 <input type="number" min="0" value={costPerBird} onChange={e => setCostPerBird(e.target.value)}
                   className={inputCls} placeholder="650" onFocus={e => e.target.select()} />
               </Field>
-              <Field label="Expected Lay Date">
-                <DatePicker value={expectedLay} onChange={setExpectedLay} />
+              <Field label="Expected Lay Date (Target laying period)">
+                <DatePicker value={expectedLay} onChange={setExpectedLay} allowFutureDates={true} />
               </Field>
             </div>
             <div className="flex gap-2 pt-1">

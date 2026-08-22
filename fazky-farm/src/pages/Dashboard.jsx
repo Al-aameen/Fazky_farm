@@ -191,30 +191,62 @@ export default function Dashboard() {
       .slice(0, 5);
   };
 
-  // Flock summary grid (one card per pen showing pen name, worker name, current bird count)
+  // Flock summary grid with per-pen daily P&L
   const getFlockSummary = () => {
     const pens = data.pens || [];
     const workers = data.workers || [];
     const census = data.census_counts || [];
-    
-    // Find latest census date
+    const prodLogs = data.production_log || [];
+
+    // Egg price + feed cost from latest settings
+    const priceSettings = (data.egg_price_settings || [])
+      .sort((a, b) => new Date(b.effective_date) - new Date(a.effective_date))[0] || {};
+    const pricePerCrate   = Number(priceSettings.price_per_crate)   || 4400;
+    const feedCostPerBag  = Number(priceSettings.feed_cost_per_bag)  || 3500; // ₦ per 25kg bag
+
+    // Latest census date for bird count
     const latestCensusDate = census
       .map(c => c.date)
       .sort((a, b) => new Date(b) - new Date(a))[0] || selectedDate;
 
     return pens.map(pen => {
       const worker = workers.find(w => w.id === pen.worker_id);
-      
-      // Calculate bird count for this pen on latestCensusDate
+
+      // Bird count from latest census
       const penCounts = census.filter(c => c.pen_id === pen.id && c.date === latestCensusDate);
       const totalBirds = penCounts.reduce((sum, c) => sum + (c.bird_count || 0), 0);
+
+      // Production for selected date
+      const log = prodLogs.find(l => l.pen_id === pen.id && l.date === selectedDate);
+      const morningEggs = Number(log?.morning_eggs) || 0;
+      const eveningEggs = Number(log?.evening_eggs) || 0;
+      const totalEggs   = morningEggs + eveningEggs;
+      const morningFeed = Number(log?.morning_feed) || 0;
+      const eveningFeed = Number(log?.evening_feed) || 0;
+      const totalFeedKg = morningFeed + eveningFeed;
+      const mortality   = Number(log?.mortality) || 0;
+
+      // P&L calculation
+      const revenue  = (totalEggs / 30) * pricePerCrate;              // eggs → crates × price
+      const feedCost = (totalFeedKg / 25) * feedCostPerBag;           // kg → bags × cost
+      const netPnl   = revenue - feedCost;
+      const hasData  = log != null;
 
       return {
         id: pen.id,
         name: pen.name,
         generation: pen.generation,
         workerName: worker ? worker.name : 'Unassigned',
-        birdCount: totalBirds
+        birdCount: totalBirds,
+        totalEggs,
+        totalFeedKg,
+        mortality,
+        revenue,
+        feedCost,
+        netPnl,
+        hasData,
+        pricePerCrate,
+        feedCostPerBag
       };
     });
   };
@@ -461,34 +493,127 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Flock Summary Grid */}
+      {/* Flock Summary Grid with Per-Pen P&L */}
       <div className="bg-white border border-border-farm rounded-2xl p-5 shadow-sm space-y-4">
-        <h3 className="font-serif text-dark-green font-bold text-base flex items-center gap-1.5 border-b border-border-farm pb-3">
-          <Layers className="w-4 h-4 text-primary" />
-          <span>Flock &amp; Pen Status</span>
-        </h3>
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {flockSummary.map((flock) => (
-            <div key={flock.id} className="bg-bg-farm border border-border-farm/70 rounded-xl p-4 hover:shadow-md transition-all flex flex-col justify-between space-y-3">
-              <div className="space-y-1">
-                <div className="font-serif text-dark-green font-bold text-sm">{flock.name}</div>
-                <div className="flex items-center gap-1 text-[10px] text-text-muted">
-                  <User className="w-3 h-3" />
-                  <span>{flock.workerName}</span>
-                </div>
-                {flock.generation && (
-                  <div className="text-[9px] bg-accent/20 text-dark-green font-bold px-1.5 py-0.5 rounded w-max">
-                    {flock.generation}
+        <div className="flex items-center justify-between border-b border-border-farm pb-3 flex-wrap gap-2">
+          <h3 className="font-serif text-dark-green font-bold text-base flex items-center gap-1.5">
+            <Layers className="w-4 h-4 text-primary" />
+            <span>Flock &amp; Pen Status</span>
+            <span className="text-[10px] font-sans font-normal text-text-muted ml-1">— {selectedDate}</span>
+          </h3>
+
+          {/* Farm-wide daily P&L banner */}
+          {(() => {
+            const totalRevenue  = flockSummary.reduce((s, p) => s + p.revenue,  0);
+            const totalFeedCost = flockSummary.reduce((s, p) => s + p.feedCost, 0);
+            const farmNetPnl    = totalRevenue - totalFeedCost;
+            const hasAnyData    = flockSummary.some(p => p.hasData);
+            if (!hasAnyData) return null;
+            return (
+              <div className={`flex items-center gap-3 px-3 py-1.5 rounded-xl border text-xs font-bold ${
+                farmNetPnl >= 0
+                  ? 'bg-emerald-50 border-emerald-200 text-dark-green'
+                  : 'bg-red-50 border-red-200 text-red-700'
+              }`}>
+                <span className="text-text-muted font-normal">Farm Day Total:</span>
+                <span>{farmNetPnl >= 0 ? '+' : ''}₦{farmNetPnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                <span className="text-text-muted font-normal">Revenue: ₦{totalRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+              </div>
+            );
+          })()}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          {flockSummary.map((flock) => {
+            const profit  = flock.netPnl >= 0;
+            const hasData = flock.hasData;
+            return (
+              <div
+                key={flock.id}
+                className={`bg-bg-farm border rounded-xl p-4 hover:shadow-md transition-all flex flex-col justify-between space-y-3 ${
+                  hasData
+                    ? profit
+                      ? 'border-emerald-200/70'
+                      : 'border-red-200/70'
+                    : 'border-border-farm/70'
+                }`}
+              >
+                {/* Pen header */}
+                <div className="space-y-1">
+                  <div className="flex items-start justify-between">
+                    <div className="font-serif text-dark-green font-bold text-sm">{flock.name}</div>
+                    {flock.generation && (
+                      <div className="text-[9px] bg-accent/20 text-dark-green font-bold px-1.5 py-0.5 rounded shrink-0">
+                        {flock.generation}
+                      </div>
+                    )}
                   </div>
+                  <div className="flex items-center gap-1 text-[10px] text-text-muted">
+                    <User className="w-3 h-3" />
+                    <span>{flock.workerName}</span>
+                  </div>
+                </div>
+
+                {/* Production stats */}
+                {hasData ? (
+                  <div className="space-y-1.5 text-[11px]">
+                    <div className="flex justify-between">
+                      <span className="text-text-muted">🥚 Eggs</span>
+                      <span className="font-bold text-text-primary">{flock.totalEggs.toLocaleString()} eggs</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-text-muted">🌽 Feed</span>
+                      <span className="font-bold text-text-primary">{flock.totalFeedKg.toFixed(1)} kg</span>
+                    </div>
+                    {flock.mortality > 0 && (
+                      <div className="flex justify-between">
+                        <span className="text-text-muted">💀 Deaths</span>
+                        <span className="font-bold text-red-accent">{flock.mortality}</span>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-text-muted italic text-center py-2">No production data for this date</p>
                 )}
+
+                {/* P&L Footer */}
+                <div className={`rounded-lg px-3 py-2 border ${
+                  !hasData
+                    ? 'bg-bg-farm border-border-farm/50'
+                    : profit
+                      ? 'bg-emerald-50 border-emerald-200'
+                      : 'bg-red-50 border-red-200'
+                }`}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-text-muted">
+                      {hasData ? (profit ? '📈 Profit' : '📉 Loss') : 'Birds'}
+                    </span>
+                    <span className={`text-sm font-serif font-black ${
+                      !hasData
+                        ? 'text-primary'
+                        : profit
+                          ? 'text-dark-green'
+                          : 'text-red-accent'
+                    }`}>
+                      {hasData
+                        ? `${profit ? '+' : ''}₦${Math.abs(flock.netPnl).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+                        : flock.birdCount.toLocaleString()
+                      }
+                    </span>
+                  </div>
+                  {hasData && (
+                    <div className="flex justify-between text-[9px] text-text-muted mt-0.5">
+                      <span>Rev: ₦{flock.revenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                      <span>Feed: ₦{flock.feedCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                    </div>
+                  )}
+                  {!hasData && (
+                    <div className="text-[9px] text-text-muted">Latest census count</div>
+                  )}
+                </div>
               </div>
-              <div className="flex items-baseline justify-between border-t border-border-farm/50 pt-2">
-                <span className="text-[10px] text-text-muted uppercase tracking-wider font-bold">Birds Count</span>
-                <span className="text-base font-serif font-black text-primary">{flock.birdCount.toLocaleString()}</span>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>

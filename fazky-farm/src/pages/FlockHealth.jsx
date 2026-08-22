@@ -13,21 +13,35 @@ import {
   Download, 
   Plus, 
   Layers, 
-  ShieldCheck 
+  ShieldCheck,
+  Edit3,
+  Trash2,
+  Check,
+  RotateCcw
 } from 'lucide-react';
 
+const DEFAULT_SCHEDULES = [
+  { id: 'def-1', name: 'Newcastle Disease (Lasota)', date: '2026-08-15', status: 'Upcoming', target: 'Batch 1 & 2', notes: 'Administer via drinking water in early morning.' },
+  { id: 'def-2', name: 'Gumboro IBD Booster', date: '2026-08-22', status: 'Upcoming', target: 'Batch 3', notes: 'Second booster dose.' },
+  { id: 'def-3', name: 'Fowl Pox Vaccine', date: '2026-08-01', status: 'Completed', target: 'All Pens', notes: 'Wing-web puncture method.' }
+];
+
 export default function FlockHealth() {
-  const { data, insertRecord, bulkInsertRecords } = useData();
+  const { data, insertRecord, updateRecord, deleteRecord, bulkInsertRecords } = useData();
   const { role, worker } = useAuth();
   const importRef = useRef(null);
 
   const [selectedDate, setSelectedDate] = useState('2026-08-05');
-  const [showVacModal, setShowVacModal] = useState(false);
+  
+  // Modal States
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [editingVac, setEditingVac] = useState(null);
 
-  // New Vaccination Form State
+  // Form Fields
   const [vacName, setVacName] = useState('');
   const [vacDate, setVacDate] = useState(new Date().toISOString().split('T')[0]);
   const [targetPen, setTargetPen] = useState('All Pens');
+  const [vacStatus, setVacStatus] = useState('Upcoming');
   const [vacNotes, setVacNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -63,31 +77,77 @@ export default function FlockHealth() {
   const todayMortality = calculateTodayMortality();
   const mortalityPct = totalBirds > 0 ? ((todayMortality / totalBirds) * 100).toFixed(2) : '0.00';
 
+  // Vaccination Schedules list
+  const schedules = (data.vaccination_schedules && data.vaccination_schedules.length > 0)
+    ? data.vaccination_schedules
+    : DEFAULT_SCHEDULES;
+
   // Handle Add Vaccination Schedule
-  const handleAddVaccination = async (e) => {
+  const handleSaveVaccination = async (e) => {
     e.preventDefault();
     if (!vacName) return;
 
     setSubmitting(true);
     try {
-      await insertRecord('expenses_log', {
-        date: vacDate,
-        day_of_week: new Date(vacDate).toLocaleDateString('en-US', { weekday: 'long' }),
-        description: `Vaccination/Medication: ${vacName} (${targetPen})`,
-        amount: 0,
-        remarks: vacNotes || 'Scheduled health treatment',
-        created_by: worker?.id || 'admin'
-      });
+      if (editingVac) {
+        // Update existing schedule
+        await updateRecord('vaccination_schedules', {
+          id: editingVac.id,
+          name: vacName,
+          date: vacDate,
+          target: targetPen,
+          status: vacStatus,
+          notes: vacNotes
+        });
+      } else {
+        // Insert new schedule
+        await insertRecord('vaccination_schedules', {
+          name: vacName,
+          date: vacDate,
+          target: targetPen,
+          status: vacStatus,
+          notes: vacNotes
+        });
+      }
 
-      setShowVacModal(false);
+      setShowAddModal(false);
+      setEditingVac(null);
       setVacName('');
       setVacNotes('');
+      setVacStatus('Upcoming');
     } catch (err) {
-      console.error('Error logging vaccination schedule:', err);
+      console.error('Error saving vaccination schedule:', err);
+      alert('Error saving schedule: ' + err.message);
     } finally {
       setSubmitting(false);
     }
   };
+
+  // Quick Toggle Status (Completed <-> Upcoming)
+  const handleToggleStatus = async (item) => {
+    try {
+      const newStatus = item.status === 'Completed' ? 'Upcoming' : 'Completed';
+      await updateRecord('vaccination_schedules', {
+        id: item.id,
+        status: newStatus
+      });
+    } catch (err) {
+      console.error('Failed to toggle status:', err);
+    }
+  };
+
+  // Handle Delete Schedule
+  const handleDeleteSchedule = async (id) => {
+    if (window.confirm('Are you sure you want to remove this vaccination schedule?')) {
+      try {
+        await deleteRecord('vaccination_schedules', id);
+      } catch (err) {
+        console.error('Failed to delete schedule:', err);
+      }
+    }
+  };
+
+  const canEdit = role === 'admin' || role === 'manager';
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-8">
@@ -100,7 +160,7 @@ export default function FlockHealth() {
           <div>
             <h1 className="text-2xl font-serif font-bold text-dark-green">Flock Health & Laying Analytics</h1>
             <p className="text-xs text-text-muted font-sans mt-0.5">
-              Monitor flock mortality rates, laying percentage efficiency index, and vaccination schedules
+              Monitor flock mortality rates, laying percentage efficiency index, and editable vaccination schedules
             </p>
           </div>
         </div>
@@ -111,90 +171,73 @@ export default function FlockHealth() {
             value={selectedDate}
             onChange={setSelectedDate}
           />
-          {/* Hidden import file input */}
-          <input
-            type="file"
-            ref={importRef}
-            className="hidden"
-            accept=".csv,.xlsx,.xls"
-            onChange={async (e) => {
-              const file = e.target.files?.[0];
-              if (!file) return;
-              try {
-                const rows = await parseImportFile(file);
-                const result = await bulkInsertRecords('production_log', rows);
-                alert(`✅ Imported ${result?.count ?? rows.length} health/production records.`);
-              } catch (err) {
-                alert('❌ Import failed: ' + err.message);
-              } finally {
-                e.target.value = '';
-              }
+          
+          <button
+            onClick={() => {
+              const tableData = (data.pens || []).map(pen => {
+                const prodLog = (data.production_log || []).find(l => l.pen_id === pen.id && l.date === selectedDate) || {};
+                const count = (data.census_counts || [])
+                  .filter(c => c.pen_id === pen.id && c.date === selectedDate)
+                  .reduce((s, c) => s + (parseInt(c.bird_count) || 0), 0) || 40;
+                return {
+                  pen_name: pen.name,
+                  date: selectedDate,
+                  active_birds: count,
+                  eggs_collected: prodLog.total_eggs || 0,
+                  feed_kg: prodLog.total_feed || 0,
+                  mortality: prodLog.mortality || 0,
+                  laying_percentage: count > 0 ? (((prodLog.total_eggs || 0) / count) * 100).toFixed(1) + '%' : '0.0%'
+                };
+              });
+              exportToExcel(`Flock_Health_${selectedDate}`, 'Flock Health', tableData);
             }}
-          />
-          <button
-            type="button"
-            onClick={() => importRef.current?.click()}
-            className="flex items-center gap-1.5 bg-white hover:bg-blue-50 text-dark-green font-bold px-3.5 py-2 rounded-xl text-xs border border-border-farm shadow-sm transition-all"
+            className="flex items-center gap-1.5 bg-white hover:bg-emerald-50 text-dark-green border border-border-farm font-bold px-3 py-1.5 rounded-xl text-xs shadow-sm transition-all"
           >
-            <span className="text-blue-600 font-bold text-base leading-none">↑</span>
-            <span className="hidden sm:inline">Import</span>
-          </button>
-          <button
-            onClick={() => exportToExcel(`fazky_flock_health_${selectedDate}`, 'Flock Health', data.production_log || [])}
-            className="flex items-center gap-1.5 bg-white hover:bg-emerald-50 text-dark-green font-bold px-3.5 py-2 rounded-xl text-xs border border-border-farm shadow-sm transition-all"
-          >
-            <Download className="w-4 h-4 text-primary" />
-            <span className="hidden sm:inline">Export Analytics</span>
+            <Download className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Export Report</span>
           </button>
         </div>
       </div>
 
-      {/* KPI Cards Grid */}
+      {/* Top Metric Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white p-5 rounded-2xl border border-border-farm shadow-sm flex items-center justify-between">
-          <div>
-            <span className="text-xs text-text-muted font-bold uppercase tracking-wider block">Laying Efficiency</span>
-            <div className="text-3xl font-serif font-black text-dark-green mt-1">{layingPercentage}%</div>
-            <p className="text-[10px] text-text-muted mt-0.5 font-semibold">({todayEggs} eggs / {totalBirds} birds)</p>
-          </div>
-          <div className="p-3 bg-emerald-50 text-primary rounded-xl">
-            <TrendingUp className="w-6 h-6" />
-          </div>
-        </div>
-
-        <div className="bg-white p-5 rounded-2xl border border-border-farm shadow-sm flex items-center justify-between">
-          <div>
-            <span className="text-xs text-text-muted font-bold uppercase tracking-wider block">Active Flock Count</span>
-            <div className="text-3xl font-serif font-black text-dark-green mt-1">{totalBirds}</div>
-            <p className="text-[10px] text-text-muted mt-0.5 font-semibold">Total birds across all pens</p>
-          </div>
-          <div className="p-3 bg-blue-50 text-blue-600 rounded-xl">
+        <div className="bg-white p-5 rounded-2xl border border-border-farm shadow-sm flex items-center gap-4">
+          <div className="p-3 bg-emerald-100 text-dark-green rounded-xl">
             <Layers className="w-6 h-6" />
           </div>
+          <div>
+            <span className="text-[10px] text-text-muted font-bold uppercase tracking-wider block">Active Flock Count</span>
+            <span className="text-xl font-serif font-bold text-dark-green">{totalBirds.toLocaleString()} Birds</span>
+          </div>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-border-farm shadow-sm flex items-center justify-between">
-          <div>
-            <span className="text-xs text-text-muted font-bold uppercase tracking-wider block">Daily Mortality</span>
-            <div className="text-3xl font-serif font-black text-red-accent mt-1">{todayMortality}</div>
-            <p className="text-[10px] text-text-muted mt-0.5 font-semibold">Mortality Rate: {mortalityPct}%</p>
+        <div className="bg-white p-5 rounded-2xl border border-border-farm shadow-sm flex items-center gap-4">
+          <div className="p-3 bg-amber-100 text-amber-800 rounded-xl">
+            <TrendingUp className="w-6 h-6" />
           </div>
-          <div className="p-3 bg-red-50 text-red-accent rounded-xl">
+          <div>
+            <span className="text-[10px] text-text-muted font-bold uppercase tracking-wider block">Laying Efficiency</span>
+            <span className="text-xl font-serif font-bold text-primary">{layingPercentage}%</span>
+          </div>
+        </div>
+
+        <div className="bg-white p-5 rounded-2xl border border-border-farm shadow-sm flex items-center gap-4">
+          <div className="p-3 bg-red-100 text-red-accent rounded-xl">
             <AlertCircle className="w-6 h-6" />
           </div>
+          <div>
+            <span className="text-[10px] text-text-muted font-bold uppercase tracking-wider block">Today's Mortality</span>
+            <span className="text-xl font-serif font-bold text-red-accent">{todayMortality} Birds ({mortalityPct}%)</span>
+          </div>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-border-farm shadow-sm flex items-center justify-between">
-          <div>
-            <span className="text-xs text-text-muted font-bold uppercase tracking-wider block">Flock Status</span>
-            <div className="text-lg font-serif font-bold text-dark-green mt-1 flex items-center gap-1">
-              <ShieldCheck className="w-5 h-5 text-primary" />
-              <span>Healthy</span>
-            </div>
-            <p className="text-[10px] text-text-muted mt-0.5 font-semibold">Vaccine schedule up to date</p>
+        <div className="bg-white p-5 rounded-2xl border border-border-farm shadow-sm flex items-center gap-4">
+          <div className="p-3 bg-blue-100 text-blue-800 rounded-xl">
+            <CheckCircle2 className="w-6 h-6" />
           </div>
-          <div className="p-3 bg-amber-50 text-amber-600 rounded-xl">
-            <Syringe className="w-6 h-6" />
+          <div>
+            <span className="text-[10px] text-text-muted font-bold uppercase tracking-wider block">Daily Egg Output</span>
+            <span className="text-xl font-serif font-bold text-dark-green">{todayEggs.toLocaleString()} Eggs</span>
           </div>
         </div>
       </div>
@@ -248,7 +291,7 @@ export default function FlockHealth() {
           </div>
         </div>
 
-        {/* Vaccination & Medication Schedule Panel */}
+        {/* Vaccination & Medication Schedule Panel (Fully Editable) */}
         <div className="bg-white rounded-2xl border border-border-farm p-6 shadow-sm space-y-4 flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between border-b border-border-farm pb-3">
@@ -256,126 +299,211 @@ export default function FlockHealth() {
                 <Syringe className="w-5 h-5 text-amber-500" />
                 <span>Vaccination Schedule</span>
               </div>
-              <button
-                onClick={() => setShowVacModal(true)}
-                className="p-1.5 bg-emerald-100 text-dark-green rounded-lg hover:bg-emerald-200 transition-colors"
-                title="Add Vaccine"
-              >
-                <Plus className="w-4 h-4" />
-              </button>
+              {canEdit && (
+                <button
+                  onClick={() => {
+                    setEditingVac(null);
+                    setVacName('');
+                    setVacDate(new Date().toISOString().split('T')[0]);
+                    setTargetPen('All Pens');
+                    setVacStatus('Upcoming');
+                    setVacNotes('');
+                    setShowAddModal(true);
+                  }}
+                  className="p-1.5 bg-emerald-100 text-dark-green rounded-lg hover:bg-emerald-200 transition-colors"
+                  title="Add Vaccine Schedule"
+                >
+                  <Plus className="w-4 h-4" />
+                </button>
+              )}
             </div>
 
             <div className="space-y-3 mt-4">
-              {[
-                { name: 'Newcastle Disease (Lasota)', date: '2026-08-15', status: 'Upcoming', target: 'Batch 1 & 2' },
-                { name: 'Gumboro IBD Booster', date: '2026-08-22', status: 'Upcoming', target: 'Batch 3' },
-                { name: 'Fowl Pox Vaccine', date: '2026-08-01', status: 'Completed', target: 'All Pens' }
-              ].map((v, idx) => (
-                <div key={idx} className="p-3 bg-bg-farm rounded-xl border border-border-farm space-y-1">
+              {schedules.map((v) => (
+                <div key={v.id} className="p-3 bg-bg-farm rounded-xl border border-border-farm space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="font-serif font-bold text-xs text-dark-green">{v.name}</span>
-                    <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-full ${
-                      v.status === 'Completed' ? 'bg-emerald-100 text-dark-green' : 'bg-amber-100 text-amber-800'
-                    }`}>
-                      {v.status}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => handleToggleStatus(v)}
+                        className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-full transition-all flex items-center gap-1 ${
+                          v.status === 'Completed' 
+                            ? 'bg-emerald-100 text-dark-green hover:bg-emerald-200' 
+                            : 'bg-amber-100 text-amber-800 hover:bg-amber-200'
+                        }`}
+                        title="Click to toggle status"
+                      >
+                        {v.status === 'Completed' ? <Check className="w-2.5 h-2.5" /> : null}
+                        <span>{v.status}</span>
+                      </button>
+
+                      {canEdit && (
+                        <>
+                          <button
+                            onClick={() => {
+                              setEditingVac(v);
+                              setVacName(v.name);
+                              setVacDate(v.date);
+                              setTargetPen(v.target || 'All Pens');
+                              setVacStatus(v.status || 'Upcoming');
+                              setVacNotes(v.notes || '');
+                              setShowAddModal(true);
+                            }}
+                            className="p-1 text-text-muted hover:text-dark-green hover:bg-white rounded transition-colors"
+                            title="Edit Schedule"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteSchedule(v.id)}
+                            className="p-1 text-text-muted hover:text-red-accent hover:bg-white rounded transition-colors"
+                            title="Delete Schedule"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
+
                   <div className="flex items-center justify-between text-[10px] text-text-muted">
-                    <span>Due: {v.date}</span>
-                    <span className="font-bold">{v.target}</span>
+                    <span>Due: <strong>{v.date}</strong></span>
+                    <span className="font-bold bg-white px-1.5 py-0.5 rounded border border-border-farm">{v.target}</span>
                   </div>
+
+                  {v.notes && (
+                    <p className="text-[10px] text-text-muted italic border-t border-border-farm/50 pt-1">
+                      {v.notes}
+                    </p>
+                  )}
                 </div>
               ))}
             </div>
           </div>
 
-          <button
-            onClick={() => setShowVacModal(true)}
-            className="w-full py-2.5 bg-dark-green hover:bg-emerald-900 text-white font-bold text-xs rounded-xl shadow-sm flex items-center justify-center gap-1.5 transition-all"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Schedule New Vaccine / Medication</span>
-          </button>
+          {canEdit && (
+            <button
+              onClick={() => {
+                setEditingVac(null);
+                setVacName('');
+                setVacDate(new Date().toISOString().split('T')[0]);
+                setTargetPen('All Pens');
+                setVacStatus('Upcoming');
+                setVacNotes('');
+                setShowAddModal(true);
+              }}
+              className="w-full py-2.5 bg-dark-green hover:bg-emerald-900 text-white font-bold text-xs rounded-xl shadow-sm flex items-center justify-center gap-1.5 transition-all"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Schedule New Vaccine / Medication</span>
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Vaccination Modal Form */}
-      {showVacModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 border border-border-farm shadow-xl space-y-4">
-            <div className="flex items-center justify-between border-b border-border-farm pb-3">
-              <h3 className="font-serif font-bold text-dark-green text-lg">Schedule Vaccination</h3>
+      {/* ─── ADD / EDIT VACCINATION MODAL ─── */}
+      {showAddModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-2xl border border-border-farm shadow-2xl max-w-[420px] w-full overflow-hidden animate-scale-in">
+            <div className="bg-dark-green p-4 text-white font-serif font-bold text-base flex justify-between items-center">
+              <span>{editingVac ? 'Edit Vaccine Schedule' : 'Schedule New Vaccine / Medication'}</span>
               <button 
-                onClick={() => setShowVacModal(false)}
-                className="text-text-muted hover:text-dark-green font-bold text-sm"
+                onClick={() => {
+                  setShowAddModal(false);
+                  setEditingVac(null);
+                }}
+                className="text-white/60 hover:text-white font-sans text-lg"
               >
                 ✕
               </button>
             </div>
 
-            <form onSubmit={handleAddVaccination} className="space-y-4 font-sans text-xs">
+            <form onSubmit={handleSaveVaccination} className="p-6 space-y-4 font-sans text-xs">
               <div>
-                <label className="block text-xs font-bold text-text-muted uppercase tracking-wider mb-1">
-                  Vaccine / Medicine Name
+                <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                  Vaccine / Medication Name *
                 </label>
                 <input
                   type="text"
+                  required
                   value={vacName}
                   onChange={(e) => setVacName(e.target.value)}
-                  placeholder="e.g. Newcastle Lasota Booster"
-                  className="w-full bg-bg-farm border border-border-farm rounded-xl px-3 py-2 text-sm font-semibold focus:ring-2 focus:ring-accent"
-                  required
+                  placeholder="e.g. Newcastle Disease (Lasota) or Vitamin Amino"
+                  className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none"
                 />
               </div>
 
-              <div>
-                <DatePicker
-                  label="Scheduled Date"
-                  value={vacDate}
-                  onChange={setVacDate}
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                    Scheduled Date *
+                  </label>
+                  <DatePicker
+                    value={vacDate}
+                    onChange={setVacDate}
+                    allowFutureDates={true}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                    Status
+                  </label>
+                  <select
+                    value={vacStatus}
+                    onChange={(e) => setVacStatus(e.target.value)}
+                    className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm font-bold text-text-primary focus:outline-none"
+                  >
+                    <option value="Upcoming">Upcoming</option>
+                    <option value="Completed">Completed</option>
+                    <option value="Overdue">Overdue</option>
+                  </select>
+                </div>
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-text-muted uppercase tracking-wider mb-1">
-                  Target Flock / Pen Block
+                <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                  Target Pen / Batch
                 </label>
                 <input
                   type="text"
                   value={targetPen}
                   onChange={(e) => setTargetPen(e.target.value)}
-                  placeholder="e.g. Pen Block A (Batch 1)"
-                  className="w-full bg-bg-farm border border-border-farm rounded-xl px-3 py-2 text-xs font-semibold"
+                  placeholder="e.g. All Pens, Pen Block A, Batch 2"
+                  className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-text-muted uppercase tracking-wider mb-1">
-                  Dosage / Notes
+                <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                  Dosage / Treatment Notes
                 </label>
-                <input
-                  type="text"
+                <textarea
+                  rows={3}
                   value={vacNotes}
                   onChange={(e) => setVacNotes(e.target.value)}
-                  placeholder="e.g. Administer via drinking water"
-                  className="w-full bg-bg-farm border border-border-farm rounded-xl px-3 py-2 text-xs"
+                  placeholder="Dosage instructions, water restriction before administration, etc."
+                  className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none"
                 />
               </div>
 
-              <div className="flex gap-2 pt-2">
+              <div className="flex gap-3 justify-end pt-4 border-t border-border-farm">
                 <button
                   type="button"
-                  onClick={() => setShowVacModal(false)}
-                  className="flex-1 py-2 bg-bg-farm text-text-primary font-bold text-xs rounded-xl border border-border-farm"
+                  onClick={() => {
+                    setShowAddModal(false);
+                    setEditingVac(null);
+                  }}
+                  className="px-4 py-2 border border-border-farm hover:bg-bg-farm rounded-lg font-bold"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="flex-1 py-2 bg-dark-green text-white font-bold text-xs rounded-xl hover:bg-emerald-900 shadow-sm"
+                  className="px-4 py-2 bg-primary hover:bg-dark-green text-white rounded-lg font-bold shadow-sm disabled:opacity-50"
                 >
-                  {submitting ? 'Scheduling...' : 'Save Schedule'}
+                  {submitting ? 'Saving...' : editingVac ? 'Save Changes' : 'Schedule Vaccine'}
                 </button>
               </div>
             </form>

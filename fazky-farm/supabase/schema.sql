@@ -13,8 +13,11 @@ CREATE TABLE IF NOT EXISTS workers (
   role TEXT NOT NULL CHECK (role IN ('admin', 'manager', 'staff')),
   base_salary NUMERIC NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'invited' CHECK (status IN ('active', 'invited', 'inactive')),
+  avatar TEXT,       -- Base64 compressed profile photo (≤100KB JPEG)
+  delete_pin TEXT,   -- Optional PIN/password for secure account deletion
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
 
 -- 2. Pen Blocks Table
 CREATE TABLE IF NOT EXISTS pen_blocks (
@@ -103,14 +106,17 @@ CREATE TABLE IF NOT EXISTS sales_log (
 -- Additive patch: metadata for custom dynamic columns (safe to re-run)
 ALTER TABLE sales_log ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;
 
--- 8. Egg Price Settings Table
+-- 8. Egg Price & Feed Cost Settings Table
 CREATE TABLE IF NOT EXISTS egg_price_settings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  price_per_crate NUMERIC NOT NULL CHECK (price_per_crate >= 0),
+  price_per_crate   NUMERIC NOT NULL DEFAULT 4400 CHECK (price_per_crate >= 0),  -- ₦ per 30-egg crate
+  feed_cost_per_bag NUMERIC NOT NULL DEFAULT 3500 CHECK (feed_cost_per_bag >= 0), -- ₦ per 25kg bag of formulated feed
   effective_date DATE NOT NULL,
   set_by UUID REFERENCES workers(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- Additive patch for existing databases
+ALTER TABLE egg_price_settings ADD COLUMN IF NOT EXISTS feed_cost_per_bag NUMERIC NOT NULL DEFAULT 3500 CHECK (feed_cost_per_bag >= 0);
 
 -- 9. Expenses Log Table
 CREATE TABLE IF NOT EXISTS expenses_log (
@@ -119,6 +125,7 @@ CREATE TABLE IF NOT EXISTS expenses_log (
   day_of_week TEXT NOT NULL,
   description TEXT NOT NULL,
   amount NUMERIC NOT NULL CHECK (amount >= 0),
+  project_id UUID,  -- Linked to farm_projects(id) — set after farm_projects table is created below
   remarks TEXT,
   created_by UUID REFERENCES workers(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -144,7 +151,6 @@ CREATE TABLE IF NOT EXISTS feed_production (
   maize_kg NUMERIC NOT NULL DEFAULT 0 CHECK (maize_kg >= 0),
   wheat_offal_bags INT NOT NULL DEFAULT 0 CHECK (wheat_offal_bags >= 0),
   concentrate_bags INT NOT NULL DEFAULT 0 CHECK (concentrate_bags >= 0),
-  soya_beans_qty NUMERIC NOT NULL DEFAULT 0 CHECK (soya_beans_qty >= 0),
   premix_qty NUMERIC NOT NULL DEFAULT 0 CHECK (premix_qty >= 0),
   feed_produced_tonnes NUMERIC NOT NULL DEFAULT 0 CHECK (feed_produced_tonnes >= 0),
   bags_produced INT NOT NULL DEFAULT 0 CHECK (bags_produced >= 0),
@@ -911,14 +917,13 @@ BEGIN
   END IF;
 END $$;
 
--- Default Feed Inventory items
+-- Default Feed Inventory items (Soya Beans removed per farm specification)
 INSERT INTO public.feed_inventory (item_name, unit, current_stock, low_stock_threshold)
 VALUES
   ('Layers Feed', 'bags', 120, 20),
   ('Maize', 'kg', 1500, 300),
   ('Wheat Offal', 'bags', 45, 10),
   ('Concentrate', 'bags', 60, 15),
-  ('Soya Beans', 'kg', 800, 150),
   ('Premix', 'kg', 50, 10)
 ON CONFLICT (item_name) DO NOTHING;
 
@@ -926,4 +931,95 @@ ON CONFLICT (item_name) DO NOTHING;
 INSERT INTO public.egg_price_settings (price_per_crate, effective_date)
 SELECT 4400, '2026-01-01'
 WHERE NOT EXISTS (SELECT 1 FROM public.egg_price_settings LIMIT 1);
+
+-- ─── Part 9: Farm Capital Projects & Vaccination Schedules ───────────────────
+
+-- 1. Farm Projects Table
+CREATE TABLE IF NOT EXISTS public.farm_projects (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'Infrastructure',
+  status TEXT NOT NULL DEFAULT 'in_progress' CHECK (status IN ('planned', 'in_progress', 'completed', 'paused')),
+  budget_estimated NUMERIC NOT NULL DEFAULT 0 CHECK (budget_estimated >= 0),
+  start_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  target_date DATE,
+  photos JSONB NOT NULL DEFAULT '[]'::jsonb, -- Array of { id, url, caption, date }
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Link expenses_log to farm_projects (add FK now that farm_projects exists)
+-- Safe to re-run: uses ADD COLUMN IF NOT EXISTS and adds FK separately
+ALTER TABLE public.expenses_log
+  ADD COLUMN IF NOT EXISTS project_id UUID;
+
+-- Add foreign key constraint only if it doesn't already exist
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints 
+    WHERE constraint_name = 'expenses_log_project_id_fkey'
+    AND table_name = 'expenses_log'
+  ) THEN
+    ALTER TABLE public.expenses_log 
+      ADD CONSTRAINT expenses_log_project_id_fkey 
+      FOREIGN KEY (project_id) REFERENCES public.farm_projects(id) ON DELETE SET NULL;
+  END IF;
+END$$;
+
+CREATE INDEX IF NOT EXISTS idx_expenses_log_project_id ON public.expenses_log (project_id);
+
+-- 2. Vaccination Schedules Table
+CREATE TABLE IF NOT EXISTS public.vaccination_schedules (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  date DATE NOT NULL,
+  target TEXT NOT NULL DEFAULT 'All Pens',
+  status TEXT NOT NULL DEFAULT 'Upcoming' CHECK (status IN ('Upcoming', 'Completed', 'Overdue')),
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Enable RLS
+ALTER TABLE public.farm_projects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.vaccination_schedules ENABLE ROW LEVEL SECURITY;
+
+-- Permissions
+REVOKE ALL ON public.farm_projects FROM anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.farm_projects TO authenticated;
+
+REVOKE ALL ON public.vaccination_schedules FROM anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.vaccination_schedules TO authenticated;
+
+-- Policies for Farm Projects (Admin & Manager full access)
+DROP POLICY IF EXISTS farm_projects_all ON public.farm_projects;
+CREATE POLICY farm_projects_all ON public.farm_projects
+FOR ALL TO authenticated
+USING (public.my_role() IN ('admin', 'manager'));
+
+-- Policies for Vaccination Schedules (All staff can view, Admin/Manager can edit)
+DROP POLICY IF EXISTS vaccination_schedules_select ON public.vaccination_schedules;
+CREATE POLICY vaccination_schedules_select ON public.vaccination_schedules
+FOR SELECT TO authenticated
+USING (true);
+
+DROP POLICY IF EXISTS vaccination_schedules_modify ON public.vaccination_schedules;
+CREATE POLICY vaccination_schedules_modify ON public.vaccination_schedules
+FOR ALL TO authenticated
+USING (public.my_role() IN ('admin', 'manager'));
+
+-- Delta Sync updated_at triggers
+DROP TRIGGER IF EXISTS trg_farm_projects_updated_at ON public.farm_projects;
+CREATE TRIGGER trg_farm_projects_updated_at
+  BEFORE UPDATE ON public.farm_projects FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+DROP TRIGGER IF EXISTS trg_vaccination_schedules_updated_at ON public.vaccination_schedules;
+CREATE TRIGGER trg_vaccination_schedules_updated_at
+  BEFORE UPDATE ON public.vaccination_schedules FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+-- Force PostgREST schema cache reload so new columns (avatar, delete_pin, project_id) are instantly active
+NOTIFY pgrst, 'reload schema';
+
 

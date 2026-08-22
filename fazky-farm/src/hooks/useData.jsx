@@ -23,7 +23,9 @@ export const TABLE_NAMES = [
   'feed_inventory_log',
   'batches',
   'grower_logs',
-  'flock_sales'
+  'flock_sales',
+  'farm_projects',
+  'vaccination_schedules'
 ];
 
 export function DataProvider({ children }) {

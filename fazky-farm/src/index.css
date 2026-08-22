@@ -18,19 +18,213 @@
 
 /* Custom Base Styles */
 body {
-  background-color: #f7f6f2; /* fallback */
+  background-color: #f7f6f2;
   background-color: var(--color-bg-farm);
   color: var(--color-text-primary);
   font-family: var(--font-sans);
   margin: 0;
   padding: 0;
   overflow-x: hidden;
+  transition: background-color 0.25s ease, color 0.25s ease;
 }
 
 /* Ensure Georgia serif is used for all headers */
 h1, h2, h3, h4, h5, h6 {
   font-family: var(--font-serif);
   color: var(--color-dark-green);
+}
+
+/* ─── DARK THEME COMPREHENSIVE OVERRIDES ─── */
+html.dark {
+  --color-bg-farm: #0f1a0e;
+  --color-text-primary: #ddeedd;
+  --color-text-muted: #7ea67b;
+  --color-border-farm: #1f2e1e;
+  --color-light-green: #162015;
+}
+
+html.dark body {
+  background-color: #0f1a0e;
+  color: #ddeedd;
+}
+
+/* ── Card / Panel surfaces ── */
+html.dark .bg-white {
+  background-color: #172516 !important;
+  color: #ddeedd !important;
+  border-color: #1f2e1e !important;
+}
+
+html.dark .bg-bg-farm,
+html.dark .bg-\[--color-bg-farm\] {
+  background-color: #0f1a0e !important;
+}
+
+html.dark .border-border-farm,
+html.dark .divide-border-farm,
+html.dark .divide-border-farm\/40,
+html.dark .divide-border-farm\/60 {
+  border-color: #1f2e1e !important;
+}
+
+/* ── Typography ── */
+html.dark h1,
+html.dark h2,
+html.dark h3,
+html.dark h4,
+html.dark h5,
+html.dark h6 {
+  color: #9de495 !important;
+}
+
+html.dark .text-dark-green {
+  color: #9de495 !important;
+}
+
+html.dark .text-text-primary {
+  color: #ddeedd !important;
+}
+
+html.dark .text-text-muted {
+  color: #7ea67b !important;
+}
+
+html.dark .font-serif {
+  color: inherit;
+}
+
+/* ── Stat badges, pills ── */
+html.dark .bg-emerald-50,
+html.dark .bg-emerald-100,
+html.dark .hover\:bg-emerald-50:hover,
+html.dark .hover\:bg-emerald-200:hover {
+  background-color: #183020 !important;
+  color: #9de495 !important;
+}
+
+html.dark .bg-amber-50,
+html.dark .bg-amber-100 {
+  background-color: #241e0c !important;
+  color: #d9a84c !important;
+}
+
+html.dark .bg-red-50,
+html.dark .bg-red-100 {
+  background-color: #220f0f !important;
+  color: #e87070 !important;
+}
+
+html.dark .bg-blue-50,
+html.dark .bg-blue-100 {
+  background-color: #0f1720 !important;
+  color: #7ab0d9 !important;
+}
+
+html.dark .bg-green-50\/20,
+html.dark .bg-green-50\/50 {
+  background-color: #183020 !important;
+}
+
+/* ── Tables ── */
+html.dark thead,
+html.dark .bg-bg-farm\/70 {
+  background-color: #111e10 !important;
+}
+
+html.dark tbody tr:hover,
+html.dark .hover\:bg-emerald-50\/40:hover,
+html.dark .hover\:bg-red-50\/30:hover,
+html.dark .hover\:bg-bg-farm\/20:hover {
+  background-color: #162515 !important;
+}
+
+/* ── Sidebar (dark-green bg — keep as-is, just boost text readability) ── */
+html.dark aside.bg-dark-green {
+  background-color: #080f07 !important;
+}
+
+/* ── Header bar ── */
+html.dark header.bg-white {
+  background-color: #172516 !important;
+  border-color: #1f2e1e !important;
+}
+
+/* ── Inputs, selects, textareas ── */
+html.dark input,
+html.dark select,
+html.dark textarea {
+  background-color: #111e10 !important;
+  color: #ddeedd !important;
+  border-color: #1f2e1e !important;
+}
+
+html.dark input::placeholder,
+html.dark textarea::placeholder {
+  color: #4a6649 !important;
+}
+
+/* ── Modals ── */
+html.dark .fixed.bg-white,
+html.dark .bg-white.rounded-2xl {
+  background-color: #172516 !important;
+  color: #ddeedd !important;
+}
+
+/* ── Form labels ── */
+html.dark label,
+html.dark .text-\[10px\],
+html.dark .text-xs {
+  color: inherit;
+}
+
+/* ── Hover states for buttons in dark ── */
+html.dark .hover\:bg-bg-farm:hover {
+  background-color: #162515 !important;
+}
+
+html.dark .hover\:bg-white:hover,
+html.dark .bg-white.hover\:bg-emerald-50 {
+  background-color: #162515 !important;
+}
+
+/* ── Calendar popover ── */
+html.dark .calendar-popover {
+  background-color: #172516 !important;
+  border-color: #1f2e1e !important;
+  color: #ddeedd !important;
+}
+
+html.dark .calendar-popover select {
+  background-color: #111e10 !important;
+  color: #9de495 !important;
+}
+
+html.dark .calendar-popover button:not([disabled]) {
+  color: #ddeedd;
+}
+
+html.dark .calendar-popover button:hover:not([disabled]) {
+  background-color: #1f3020 !important;
+  color: #9de495 !important;
+}
+
+html.dark .calendar-day-selected {
+  background-color: #2d5a27 !important;
+  color: #ffffff !important;
+}
+
+html.dark .calendar-day-today {
+  background-color: #183025 !important;
+  color: #9de495 !important;
+}
+
+/* ── Custom scrollbars for dark mode ── */
+html.dark .scrollbar-thin::-webkit-scrollbar-track {
+  background: #111e10;
+}
+
+html.dark .scrollbar-thin::-webkit-scrollbar-thumb {
+  background: #1f2e1e;
 }
 
 /* Custom Scrollbar Styles for Sticky Grids */
@@ -48,3 +242,15 @@ h1, h2, h3, h4, h5, h6 {
 .scrollbar-thin::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-muted);
 }
+
+/* Utility: date picker smart flip animation */
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-6px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0)   scale(1); }
+}
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0)   scale(1); }
+}
+.animate-slide-down { animation: slideDown 0.15s ease-out; }
+.animate-slide-up   { animation: slideUp   0.15s ease-out; }

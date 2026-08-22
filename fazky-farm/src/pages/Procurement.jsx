@@ -29,7 +29,6 @@ export default function Procurement() {
   const [prodMaize, setProdMaize] = useState('');
   const [prodWheat, setProdWheat] = useState('');
   const [prodConcentrate, setProdConcentrate] = useState('');
-  const [prodSoya, setProdSoya] = useState('');
   const [prodPremix, setProdPremix] = useState('');
   const [prodTonnes, setProdTonnes] = useState('');
   const [prodBags, setProdBags] = useState('');
@@ -93,19 +92,17 @@ export default function Procurement() {
     const maize = parseFloat(prodMaize) || 0;
     const wheat = parseInt(prodWheat, 10) || 0;
     const conc = parseInt(prodConcentrate, 10) || 0;
-    const soya = parseFloat(prodSoya) || 0;
     const premix = parseFloat(prodPremix) || 0;
     const tonnes = parseFloat(prodTonnes) || 0;
     const bags = parseInt(prodBags, 10) || 0;
 
     try {
-      // Log Feed Production (which fires handleFeedProductionTrigger in useData to deduct/add stock)
+      // Log Feed Production
       await insertRecord('feed_production', {
         date: prodDate,
         maize_kg: maize,
         wheat_offal_bags: wheat,
         concentrate_bags: conc,
-        soya_beans_qty: soya,
         premix_qty: premix,
         feed_produced_tonnes: tonnes,
         bags_produced: bags
@@ -115,7 +112,6 @@ export default function Procurement() {
       setProdMaize('');
       setProdWheat('');
       setProdConcentrate('');
-      setProdSoya('');
       setProdPremix('');
       setProdTonnes('');
       setProdBags('');
@@ -328,7 +324,6 @@ export default function Procurement() {
                   <th className="p-3 text-center">Maize Used</th>
                   <th className="p-3 text-center">Wheat Offal Used</th>
                   <th className="p-3 text-center">Concentrate Used</th>
-                  <th className="p-3 text-center">Soya Used</th>
                   <th className="p-3 text-center">Premix Used</th>
                   <th className="p-3 text-right bg-green-50/50 text-dark-green font-black">Feed Output</th>
                   <th className="p-3 text-center font-bold text-primary">Bags Output</th>
@@ -337,7 +332,7 @@ export default function Procurement() {
               <tbody className="divide-y divide-border-farm/60">
                 {(data.feed_production || []).length === 0 ? (
                   <tr>
-                    <td colSpan="8" className="p-8 text-center text-text-muted font-sans text-xs">
+                    <td colSpan="7" className="p-8 text-center text-text-muted font-sans text-xs">
                       No feed milling production logged. Click "Log Milling Production" to record a mixing session.
                     </td>
                   </tr>
@@ -350,7 +345,6 @@ export default function Procurement() {
                         <td className="p-3 text-center font-mono">{row.maize_kg.toLocaleString()} kg</td>
                         <td className="p-3 text-center font-mono">{row.wheat_offal_bags} bags</td>
                         <td className="p-3 text-center font-mono">{row.concentrate_bags} bags</td>
-                        <td className="p-3 text-center font-mono">{row.soya_beans_qty.toLocaleString()} kg</td>
                         <td className="p-3 text-center font-mono">{row.premix_qty.toLocaleString()} kg</td>
                         <td className="p-3 text-right font-mono bg-green-50/20 font-black text-dark-green">
                           {row.feed_produced_tonnes.toLocaleString()} tonnes
@@ -654,19 +648,7 @@ export default function Procurement() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-[9px] text-text-muted uppercase tracking-wider mb-1">
-                    Soya Beans (KG)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={prodSoya}
-                    onChange={(e) => setProdSoya(e.target.value)}
-                    className="w-full bg-bg-farm border border-border-farm rounded-lg px-2 py-1.5 text-xs font-mono"
-                  />
-                </div>
+              <div className="grid grid-cols-1 gap-4">
                 <div>
                   <label className="block text-[9px] text-text-muted uppercase tracking-wider mb-1">
                     Premix (KG)
