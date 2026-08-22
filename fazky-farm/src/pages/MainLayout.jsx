@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { useData } from '../hooks/useData';
 import NetworkStatus from '../components/NetworkStatus';
 import { 
   LayoutDashboard, 
@@ -13,17 +14,19 @@ import {
   Hammer, 
   LogOut, 
   Menu, 
-  ChevronLeft,
-  UserCheck,
-  Settings as SettingsIcon,
-  Package,
-  Activity,
-  ShoppingCart,
-  Egg
+  ChevronLeft, 
+  UserCheck, 
+  Settings as SettingsIcon, 
+  Package, 
+  Activity, 
+  ShoppingCart, 
+  Egg,
+  WifiOff
 } from 'lucide-react';
 
 export default function MainLayout({ activePage, setActivePage, children }) {
   const { user, role, worker, logout } = useAuth();
+  const { isOnline } = useData();
   const [collapsed, setCollapsed] = useState(false);
 
   // Define navigation items with icon, label, id, and allowed roles
@@ -45,7 +48,7 @@ export default function MainLayout({ activePage, setActivePage, children }) {
   ];
 
   // Filter items by current user's role
-  const visibleNavItems = navItems.filter(item => item.roles.includes(role));
+  const visibleNavItems = navItems.filter(item => item.roles.includes(role || 'staff'));
 
   const handleNavClick = (id) => {
     setActivePage(id);
@@ -102,11 +105,24 @@ export default function MainLayout({ activePage, setActivePage, children }) {
         {/* User Info & Logout Panel */}
         <div className="p-3 border-t border-white/10 bg-black/10 shrink-0">
           {!collapsed && (
-            <div className="mb-3 px-2 py-1 bg-white/5 rounded-lg">
-              <div className="text-xs text-light-green truncate font-bold">{worker?.name || 'Worker'}</div>
-              <div className="text-[10px] text-accent/80 uppercase tracking-widest font-sans font-bold flex items-center gap-1 mt-0.5">
-                <UserCheck className="w-3 h-3" />
-                <span>{role}</span>
+            <div className="mb-3 p-2 bg-white/5 rounded-xl flex items-center gap-2.5">
+              {worker?.avatar ? (
+                <img 
+                  src={worker.avatar} 
+                  alt={worker.name || 'User'} 
+                  className="w-8 h-8 rounded-full object-cover border border-accent/40 shrink-0"
+                />
+              ) : (
+                <div className="w-8 h-8 rounded-full bg-accent/20 text-accent font-bold text-xs flex items-center justify-center border border-accent/30 shrink-0">
+                  {(worker?.name || user?.email || 'U').charAt(0).toUpperCase()}
+                </div>
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="text-xs text-light-green truncate font-bold">{worker?.name || 'Worker'}</div>
+                <div className="text-[9px] text-accent/80 uppercase tracking-widest font-sans font-bold flex items-center gap-1">
+                  <UserCheck className="w-2.5 h-2.5" />
+                  <span>{role || 'staff'}</span>
+                </div>
               </div>
             </div>
           )}
@@ -123,6 +139,14 @@ export default function MainLayout({ activePage, setActivePage, children }) {
 
       {/* Main Container */}
       <div className="flex flex-col flex-grow min-w-0">
+        {/* Offline Global Alert Banner */}
+        {!isOnline && (
+          <div className="bg-red-600 text-white px-4 py-2 text-xs font-bold flex items-center justify-center gap-2 shadow-sm animate-pulse z-30">
+            <WifiOff className="w-4 h-4" />
+            <span>⚠️ You are offline. Data changes cannot be saved until connection is restored.</span>
+          </div>
+        )}
+
         {/* Top Header Bar */}
         <header className="bg-white border-b border-border-farm h-16 px-6 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-4">
@@ -141,9 +165,17 @@ export default function MainLayout({ activePage, setActivePage, children }) {
           <div className="flex items-center gap-4">
             <NetworkStatus />
             {!collapsed && (
-              <div className="text-xs text-text-muted font-semibold bg-bg-farm border border-border-farm px-3 py-1 rounded-full flex items-center gap-1.5 shadow-sm">
-                <span className="w-1.5 h-1.5 rounded-full bg-primary"></span>
-                <span>ID: {worker?.name || 'Local User'}</span>
+              <div className="text-xs text-text-muted font-semibold bg-bg-farm border border-border-farm pl-2 pr-3 py-1 rounded-full flex items-center gap-2 shadow-sm">
+                {worker?.avatar ? (
+                  <img 
+                    src={worker.avatar} 
+                    alt={worker.name || 'User'} 
+                    className="w-5 h-5 rounded-full object-cover border border-primary/40"
+                  />
+                ) : (
+                  <span className="w-2 h-2 rounded-full bg-primary"></span>
+                )}
+                <span>{worker?.name || user?.email || 'User'}</span>
               </div>
             )}
           </div>

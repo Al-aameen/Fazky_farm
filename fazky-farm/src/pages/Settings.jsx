@@ -1,41 +1,106 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useData } from '../hooks/useData';
 import { useAuth } from '../context/AuthContext';
+import { supabase } from '../lib/supabase';
+import { compressFarmImage, isValidImageFile } from '../lib/imageCompression';
 import { 
   Settings as SettingsIcon, 
   Download, 
   Upload, 
-  RefreshCw, 
   CheckCircle2, 
   AlertCircle, 
   FileSpreadsheet, 
   CircleDollarSign, 
-  Database,
-  UserCheck,
-  Zap,
-  ShieldCheck,
-  FileText
+  UserCheck, 
+  Camera, 
+  Trash2, 
+  UserPlus, 
+  KeyRound, 
+  ShieldAlert, 
+  ShieldCheck, 
+  FileText,
+  Lock,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { exportToCSV, exportToExcel, parseImportFile, downloadCSVTemplate } from '../lib/csvExportImport';
 
 export default function Settings() {
-  const { data, insertRecord, updateRecord, bulkInsertRecords, flushQueue, forceFullSync, queuedCount, isSyncing, isOnline } = useData();
-  const { user, role, worker, isSimulationMode } = useAuth();
+  const { data, insertRecord, updateRecord, deleteRecord, bulkInsertRecords, refresh, isOnline } = useData();
+  const { user, role, worker, updateProfile } = useAuth();
+
+  // Avatar Upload States
+  const [avatarPreview, setAvatarPreview] = useState(worker?.avatar || null);
+  const [compressingImage, setCompressingImage] = useState(false);
+  const [avatarSuccess, setAvatarSuccess] = useState('');
+  const [avatarError, setAvatarError] = useState('');
+  const fileInputRef = useRef(null);
 
   // Egg Price State
   const currentEggPriceObj = (data.egg_price_settings || []).sort((a, b) => new Date(b.effective_date) - new Date(a.effective_date))[0] || { price_per_crate: 4400, effective_date: '2026-01-01' };
-  
   const [eggPrice, setEggPrice] = useState(currentEggPriceObj.price_per_crate || 4400);
   const [effectiveDate, setEffectiveDate] = useState(currentEggPriceObj.effective_date || new Date().toISOString().split('T')[0]);
   const [savingPrice, setSavingPrice] = useState(false);
   const [priceSuccess, setPriceSuccess] = useState(false);
+
+  // Worker Management & Security Modal States
+  const [showAddWorkerModal, setShowAddWorkerModal] = useState(false);
+  const [newWorkerName, setNewWorkerName] = useState('');
+  const [newWorkerEmail, setNewWorkerEmail] = useState('');
+  const [newWorkerRole, setNewWorkerRole] = useState('staff');
+  const [newWorkerSalary, setNewWorkerSalary] = useState('');
+  const [newWorkerPassword, setNewWorkerPassword] = useState('');
+  const [showNewWorkerPass, setShowNewWorkerPass] = useState(false);
+  const [workerActionLoading, setWorkerActionLoading] = useState(false);
+  const [workerActionMsg, setWorkerActionMsg] = useState({ type: '', text: '' });
+
+  // Delete Worker Security Modal States
+  const [workerToDelete, setWorkerToDelete] = useState(null);
+  const [adminAuthPassword, setAdminAuthPassword] = useState('');
+  const [deleteConfirmError, setDeleteConfirmError] = useState('');
 
   // Import State
   const [selectedTargetTable, setSelectedTargetTable] = useState('sales_log');
   const [importing, setImporting] = useState(false);
   const [importStatus, setImportStatus] = useState(null);
 
-  // Handle Save Egg Price
+  // 1. Handle Avatar Upload with Image Compression
+  const handleAvatarChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!isValidImageFile(file)) {
+      setAvatarError('Please choose a valid image file (JPEG, PNG, or WebP).');
+      return;
+    }
+
+    setCompressingImage(true);
+    setAvatarError('');
+    setAvatarSuccess('');
+
+    try {
+      // Compress to ≤100KB JPEG using browser-image-compression
+      const { base64, sizeKB } = await compressFarmImage(file);
+      setAvatarPreview(base64);
+
+      // Save to worker profile in database
+      const res = await updateProfile({ avatar: base64 });
+      if (res.success) {
+        setAvatarSuccess(`Avatar updated and compressed to ${sizeKB}KB!`);
+        setTimeout(() => setAvatarSuccess(''), 4000);
+      } else {
+        setAvatarError(res.error || 'Failed to save avatar.');
+      }
+    } catch (err) {
+      console.error('Avatar upload failed:', err);
+      setAvatarError(err.message || 'Image compression failed.');
+    } finally {
+      setCompressingImage(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  // 2. Handle Save Egg Price
   const handleSaveEggPrice = async (e) => {
     e.preventDefault();
     setSavingPrice(true);
@@ -45,7 +110,7 @@ export default function Settings() {
       const payload = {
         price_per_crate: parseFloat(eggPrice) || 0,
         effective_date: effectiveDate,
-        set_by: worker?.id || 'admin'
+        set_by: worker?.id || null
       };
 
       await insertRecord('egg_price_settings', payload);
@@ -53,12 +118,130 @@ export default function Settings() {
       setTimeout(() => setPriceSuccess(false), 3000);
     } catch (err) {
       console.error('Error saving egg price:', err);
+      alert('Error saving egg price: ' + err.message);
     } finally {
       setSavingPrice(false);
     }
   };
 
-  // Handle Export File
+  // 3. Handle Add/Invite Worker
+  const handleAddWorker = async (e) => {
+    e.preventDefault();
+    const salary = parseFloat(newWorkerSalary);
+    if (!newWorkerName || !newWorkerEmail || isNaN(salary) || salary < 0) return;
+
+    setWorkerActionLoading(true);
+    setWorkerActionMsg({ type: '', text: '' });
+
+    try {
+      const payload = {
+        action: 'create',
+        name: newWorkerName,
+        email: newWorkerEmail,
+        role: newWorkerRole,
+        base_salary: salary,
+        password: newWorkerPassword || undefined
+      };
+
+      let edgeWorked = false;
+      try {
+        const { data: edgeRes, error: edgeErr } = await supabase.functions.invoke('invite-worker', {
+          body: payload
+        });
+        if (!edgeErr && edgeRes?.success) {
+          edgeWorked = true;
+        }
+      } catch (_) {}
+
+      if (!edgeWorked) {
+        // Fallback: direct insert to workers table
+        await insertRecord('workers', {
+          name: newWorkerName,
+          email: newWorkerEmail.toLowerCase(),
+          role: newWorkerRole,
+          base_salary: salary,
+          status: newWorkerPassword ? 'active' : 'invited'
+        });
+      }
+
+      await refresh();
+      setWorkerActionMsg({
+        type: 'success',
+        text: `Worker ${newWorkerName} successfully created! ${newWorkerPassword ? 'Credentials active.' : 'Invite recorded.'}`
+      });
+
+      setShowAddWorkerModal(false);
+      setNewWorkerName('');
+      setNewWorkerEmail('');
+      setNewWorkerRole('staff');
+      setNewWorkerSalary('');
+      setNewWorkerPassword('');
+      setTimeout(() => setWorkerActionMsg({ type: '', text: '' }), 5000);
+    } catch (err) {
+      console.error('Failed to add worker:', err);
+      setWorkerActionMsg({ type: 'error', text: err.message || 'Worker creation failed.' });
+    } finally {
+      setWorkerActionLoading(false);
+    }
+  };
+
+  // 4. Handle Delete Worker with Password Authorization
+  const handleConfirmDeleteWorker = async (e) => {
+    e.preventDefault();
+    if (!workerToDelete) return;
+    if (!adminAuthPassword) {
+      setDeleteConfirmError('Please enter your admin password to authorize deletion.');
+      return;
+    }
+
+    setWorkerActionLoading(true);
+    setDeleteConfirmError('');
+
+    try {
+      // 1. Verify admin credentials with Supabase Auth
+      const { error: authErr } = await supabase.auth.signInWithPassword({
+        email: user?.email,
+        password: adminAuthPassword
+      });
+
+      if (authErr) {
+        setDeleteConfirmError('Incorrect admin password. Deletion cancelled.');
+        setWorkerActionLoading(false);
+        return;
+      }
+
+      // 2. Call Edge Function / Delete Record
+      try {
+        await supabase.functions.invoke('invite-worker', {
+          body: {
+            action: 'delete',
+            worker_id: workerToDelete.id,
+            auth_user_id: workerToDelete.auth_user_id
+          }
+        });
+      } catch (_) {}
+
+      // Delete from workers table directly
+      await deleteRecord('workers', workerToDelete.id);
+      await refresh();
+
+      setWorkerActionMsg({
+        type: 'success',
+        text: `Worker "${workerToDelete.name}" was permanently removed.`
+      });
+
+      setWorkerToDelete(null);
+      setAdminAuthPassword('');
+      setTimeout(() => setWorkerActionMsg({ type: '', text: '' }), 5000);
+    } catch (err) {
+      console.error('Delete worker error:', err);
+      setDeleteConfirmError(err.message || 'Failed to delete worker.');
+    } finally {
+      setWorkerActionLoading(false);
+    }
+  };
+
+  // 5. Handle Export File
   const handleExportData = (format) => {
     const tableData = data[selectedTargetTable] || [];
     if (tableData.length === 0) {
@@ -74,7 +257,7 @@ export default function Settings() {
     }
   };
 
-  // Handle File Upload & Import
+  // 6. Handle File Upload & Import
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -103,7 +286,7 @@ export default function Settings() {
       setImportStatus({ type: 'error', message: err.message });
     } finally {
       setImporting(false);
-      e.target.value = null; // reset file input
+      e.target.value = null;
     }
   };
 
@@ -117,22 +300,114 @@ export default function Settings() {
           </div>
           <div>
             <h1 className="text-2xl font-serif font-bold text-dark-green">System Settings & Data Hub</h1>
-            <p className="text-xs text-text-muted font-sans mt-0.5">Manage pricing, sync performance, and CSV/Excel imports & exports</p>
+            <p className="text-xs text-text-muted font-sans mt-0.5">Manage user profiles, worker accounts, egg pricing, and spreadsheets</p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          <span className={`px-3 py-1 text-xs font-bold rounded-full ${
-            isSimulationMode ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-dark-green'
-          }`}>
-            {isSimulationMode ? 'Simulation Mode' : 'Supabase Live Connection'}
+          <span className="px-3 py-1 text-xs font-bold rounded-full bg-emerald-100 text-dark-green flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-600"></span>
+            Supabase Live
           </span>
         </div>
       </div>
 
-      {/* Grid Section 1: Egg Pricing & Performance Control */}
+      {workerActionMsg.text && (
+        <div className={`p-4 rounded-xl text-xs font-bold flex items-center gap-2 border shadow-sm ${
+          workerActionMsg.type === 'success' 
+            ? 'bg-emerald-50 border-emerald-200 text-dark-green' 
+            : 'bg-red-50 border-red-200 text-red-accent'
+        }`}>
+          {workerActionMsg.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
+          <span>{workerActionMsg.text}</span>
+        </div>
+      )}
+
+      {/* Grid Section 1: User Profile with Avatar Upload & Egg Pricing */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Egg Pricing Card */}
+        
+        {/* Card 1: User Profile & Photo Upload (with imageCompression) */}
+        <div className="bg-white p-6 rounded-2xl border border-border-farm shadow-sm space-y-5">
+          <div className="flex items-center gap-2 text-dark-green font-serif font-bold text-lg border-b border-border-farm pb-3">
+            <UserCheck className="w-5 h-5 text-primary" />
+            <span>My Profile & Avatar</span>
+          </div>
+
+          <div className="flex items-center gap-4">
+            {/* Avatar Circle with Upload Trigger */}
+            <div className="relative group shrink-0">
+              {avatarPreview ? (
+                <img 
+                  src={avatarPreview} 
+                  alt="Avatar" 
+                  className="w-18 h-18 rounded-full object-cover border-2 border-primary shadow-sm"
+                />
+              ) : (
+                <div className="w-18 h-18 rounded-full bg-emerald-50 text-dark-green font-serif font-bold text-2xl flex items-center justify-center border-2 border-dashed border-border-farm shadow-sm">
+                  {(worker?.name || user?.email || 'U').charAt(0).toUpperCase()}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={compressingImage}
+                className="absolute inset-0 bg-black/40 hover:bg-black/60 rounded-full flex flex-col items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer disabled:opacity-50"
+                title="Change Photo"
+              >
+                <Camera className="w-5 h-5 mb-0.5" />
+                <span className="text-[9px] font-bold">Upload</span>
+              </button>
+
+              <input 
+                type="file" 
+                ref={fileInputRef} 
+                accept="image/jpeg,image/png,image/webp" 
+                onChange={handleAvatarChange} 
+                className="hidden" 
+              />
+            </div>
+
+            <div className="space-y-1">
+              <h3 className="font-serif font-bold text-dark-green text-base">{worker?.name || 'Farm User'}</h3>
+              <p className="text-xs text-text-muted font-mono">{user?.email || worker?.email || 'N/A'}</p>
+              <div className="flex items-center gap-2 pt-1">
+                <span className="text-[10px] font-bold uppercase tracking-wider bg-dark-green text-accent px-2 py-0.5 rounded">
+                  {role || 'staff'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={compressingImage}
+                  className="text-xs font-bold text-primary hover:text-dark-green underline flex items-center gap-1"
+                >
+                  <Camera className="w-3.5 h-3.5" />
+                  <span>{compressingImage ? 'Compressing...' : 'Upload Photo'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {avatarSuccess && (
+            <div className="p-3 bg-emerald-50 border border-emerald-200 text-dark-green rounded-xl text-xs font-bold flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-primary shrink-0" />
+              <span>{avatarSuccess}</span>
+            </div>
+          )}
+
+          {avatarError && (
+            <div className="p-3 bg-red-50 border border-red-200 text-red-accent rounded-xl text-xs font-bold flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{avatarError}</span>
+            </div>
+          )}
+
+          <p className="text-[11px] text-text-muted leading-relaxed">
+            Photos are automatically compressed to <strong>≤100KB</strong> using high-performance web workers before saving to ensure fast load times.
+          </p>
+        </div>
+
+        {/* Card 2: Egg Pricing Card */}
         <div className="bg-white p-6 rounded-2xl border border-border-farm shadow-sm space-y-4">
           <div className="flex items-center gap-2 text-dark-green font-serif font-bold text-lg border-b border-border-farm pb-3">
             <CircleDollarSign className="w-5 h-5 text-primary" />
@@ -140,7 +415,7 @@ export default function Settings() {
           </div>
 
           <p className="text-xs text-text-muted leading-relaxed">
-            Set the current selling price per crate of eggs. This rate is used across Sales Log computations and revenue statistics.
+            Set the official selling price per crate of eggs used across all Sales Log computations and revenue summaries.
           </p>
 
           <form onSubmit={handleSaveEggPrice} className="space-y-4">
@@ -181,104 +456,99 @@ export default function Settings() {
 
             <button
               type="submit"
-              disabled={savingPrice}
-              className="w-full bg-dark-green text-white font-bold py-2.5 rounded-xl text-sm hover:bg-emerald-900 transition-all shadow-sm flex items-center justify-center gap-2"
+              disabled={savingPrice || !isOnline}
+              className="w-full bg-dark-green text-white font-bold py-2.5 rounded-xl text-sm hover:bg-emerald-900 transition-all shadow-sm flex items-center justify-center gap-2 disabled:opacity-50"
             >
               {savingPrice ? 'Updating...' : 'Save Egg Price Setting'}
             </button>
           </form>
         </div>
-
-        {/* Sync & Speed Controller */}
-        <div className="bg-white p-6 rounded-2xl border border-border-farm shadow-sm space-y-4 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center gap-2 text-dark-green font-serif font-bold text-lg border-b border-border-farm pb-3">
-              <Zap className="w-5 h-5 text-amber-500" />
-              <span>Database Sync & Performance</span>
-            </div>
-
-            <p className="text-xs text-text-muted leading-relaxed mt-3">
-              Data fetches now run in high-speed parallel mode (`Promise.all`). Force an instant cloud sync or inspect offline queued operations below.
-            </p>
-
-            <div className="mt-4 p-4 bg-bg-farm rounded-xl border border-border-farm space-y-3">
-              <div className="flex items-center justify-between text-xs font-semibold">
-                <span className="text-text-muted">Network Status:</span>
-                <span className={isOnline ? 'text-emerald-700 font-bold' : 'text-red-600 font-bold'}>
-                  {isOnline ? '🟢 Online' : '🔴 Offline'}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between text-xs font-semibold">
-                <span className="text-text-muted">Queued Offline Changes:</span>
-                <span className="bg-white px-2 py-0.5 rounded border border-border-farm font-bold text-dark-green">
-                  {queuedCount} records
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between text-xs font-semibold">
-                <span className="text-text-muted">Sync Architecture:</span>
-                <span className="text-primary font-bold">Delta Sync (Incremental)</span>
-              </div>
-            </div>
-
-            {/* Show failed / stuck items with clear option */}
-            {queuedCount > 0 && (
-              <div className="mt-3 space-y-2">
-                <p className="text-[10px] text-text-muted font-bold uppercase tracking-wider">
-                  Stuck Queue Items — click Clear to discard:
-                </p>
-                <button
-                  onClick={async () => {
-                    if (window.confirm(
-                      `This will permanently discard ${queuedCount} unsynced record(s) from the offline queue. Only do this if you are certain these changes are already saved in Supabase, or if the records are test/invalid data. Continue?`
-                    )) {
-                      const { initDB } = await import('../lib/offlineQueue');
-                      const db = await initDB();
-                      const tx = db.transaction('sync_queue', 'readwrite');
-                      await tx.objectStore('sync_queue').clear();
-                      await tx.done;
-                      window.location.reload();
-                    }
-                  }}
-                  className="w-full font-bold py-2 rounded-xl text-xs shadow-sm flex items-center justify-center gap-2 bg-red-50 border border-red-200 text-red-700 hover:bg-red-100 transition-all"
-                >
-                  🗑️ Clear All Stuck Queue Items ({queuedCount})
-                </button>
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-2">
-          <button
-            onClick={flushQueue}
-            disabled={isSyncing || !isOnline}
-            className={`w-full font-bold py-2.5 rounded-xl text-sm shadow-sm flex items-center justify-center gap-2 transition-all ${
-              isSyncing ? 'bg-amber-100 text-amber-800' : 'bg-primary text-white hover:bg-emerald-700'
-            }`}
-          >
-            <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
-            <span>{isSyncing ? 'Syncing Records...' : 'Trigger Fast Parallel Sync'}</span>
-          </button>
-
-          <button
-            onClick={async () => {
-              if (window.confirm('Force a full re-download from Supabase? This clears all delta sync timestamps and re-pulls all data. Use only if your local data seems out of sync.')) {
-                await forceFullSync();
-                alert('✅ Full sync complete — all tables refreshed.');
-              }
-            }}
-            disabled={isSyncing || !isOnline}
-            className="w-full font-bold py-2.5 rounded-xl text-sm shadow-sm flex items-center justify-center gap-2 transition-all bg-white border border-border-farm text-dark-green hover:bg-red-50 hover:border-red-300 hover:text-red-700 disabled:opacity-40"
-          >
-            <Database className="w-4 h-4" />
-            <span>Force Full Sync (Reset Delta)</span>
-          </button>
-          </div>
-        </div>
       </div>
 
-      {/* Grid Section 2: CSV & Excel Data Import/Export Center */}
+      {/* Grid Section 2: Worker Management & Delete Security (Admin Only) */}
+      {role === 'admin' && (
+        <div className="bg-white p-6 rounded-2xl border border-border-farm shadow-sm space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border-farm pb-3">
+            <div className="flex items-center gap-2 text-dark-green font-serif font-bold text-lg">
+              <ShieldCheck className="w-5 h-5 text-primary" />
+              <span>Worker Accounts & Delete Security</span>
+            </div>
+            <button
+              onClick={() => setShowAddWorkerModal(true)}
+              className="flex items-center gap-1.5 bg-primary hover:bg-dark-green text-white font-bold px-3.5 py-1.5 rounded-xl text-xs shadow-sm transition-all"
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              <span>Add / Invite Worker</span>
+            </button>
+          </div>
+
+          <p className="text-xs text-text-muted">
+            Manage worker accounts. Deleting a worker requires entering your Admin Password to prevent accidental deletion.
+          </p>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="border-b border-border-farm text-[10px] uppercase font-bold text-text-muted bg-bg-farm">
+                  <th className="p-3 rounded-l-lg">Worker</th>
+                  <th className="p-3">Email</th>
+                  <th className="p-3">Role</th>
+                  <th className="p-3">Status</th>
+                  <th className="p-3 text-right rounded-r-lg">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border-farm/60">
+                {(data.workers || []).map((w) => (
+                  <tr key={w.id} className="hover:bg-bg-farm/40 transition-colors">
+                    <td className="p-3 font-bold text-dark-green flex items-center gap-2">
+                      {w.avatar ? (
+                        <img src={w.avatar} alt={w.name} className="w-6 h-6 rounded-full object-cover border border-primary/30" />
+                      ) : (
+                        <div className="w-6 h-6 rounded-full bg-dark-green text-white text-[10px] flex items-center justify-center font-bold">
+                          {w.name?.charAt(0) || 'W'}
+                        </div>
+                      )}
+                      <span>{w.name}</span>
+                    </td>
+                    <td className="p-3 font-mono text-text-muted">{w.email}</td>
+                    <td className="p-3">
+                      <span className="bg-emerald-50 text-dark-green border border-emerald-200 px-2 py-0.5 rounded text-[10px] font-bold uppercase">
+                        {w.role}
+                      </span>
+                    </td>
+                    <td className="p-3">
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                        w.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'
+                      }`}>
+                        {w.status || 'active'}
+                      </span>
+                    </td>
+                    <td className="p-3 text-right">
+                      {w.email?.toLowerCase() !== user?.email?.toLowerCase() ? (
+                        <button
+                          onClick={() => {
+                            setWorkerToDelete(w);
+                            setAdminAuthPassword('');
+                            setDeleteConfirmError('');
+                          }}
+                          className="text-red-accent hover:bg-red-50 p-1.5 rounded-lg border border-transparent hover:border-red-200 transition-all"
+                          title="Delete Worker"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-text-muted italic">Current User</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Grid Section 3: CSV & Excel Data Import/Export Center */}
       <div className="bg-white p-6 rounded-2xl border border-border-farm shadow-sm space-y-6">
         <div className="flex items-center justify-between border-b border-border-farm pb-3">
           <div className="flex items-center gap-2 text-dark-green font-serif font-bold text-lg">
@@ -287,10 +557,6 @@ export default function Settings() {
           </div>
           <span className="text-xs text-text-muted font-sans font-semibold">Support for .csv & .xlsx format</span>
         </div>
-
-        <p className="text-xs text-text-muted">
-          Select a database module below to export current data or bulk-import new entries directly from a CSV or Excel spreadsheet.
-        </p>
 
         {/* Target Module Selector */}
         <div>
@@ -357,7 +623,7 @@ export default function Settings() {
               <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
               <span>Sample Template</span>
             </div>
-            <p className="text-[11px] text-text-muted">Download a formatted sample template with correct column names for importing.</p>
+            <p className="text-[11px] text-text-muted">Download a formatted template with correct column names for importing.</p>
             <button
               onClick={() => {
                 const map = { sales_log: 'sales', expenses_log: 'expenses', production_log: 'production', workers: 'workers', maize_records: 'maize' };
@@ -405,30 +671,199 @@ export default function Settings() {
         )}
       </div>
 
-      {/* Grid Section 3: User Profile & Role Info */}
-      <div className="bg-white p-6 rounded-2xl border border-border-farm shadow-sm">
-        <div className="flex items-center gap-2 text-dark-green font-serif font-bold text-lg border-b border-border-farm pb-3 mb-4">
-          <UserCheck className="w-5 h-5 text-primary" />
-          <span>User Account & Role Profile</span>
-        </div>
+      {/* ─── MODAL 1: ADD / INVITE WORKER WITH OPTIONAL PASSWORD ─── */}
+      {showAddWorkerModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-2xl border border-border-farm shadow-2xl max-w-[420px] w-full overflow-hidden animate-scale-in">
+            <div className="bg-dark-green p-4 text-white font-serif font-bold text-base flex justify-between items-center">
+              <span>Add / Invite Worker</span>
+              <button 
+                onClick={() => setShowAddWorkerModal(false)}
+                className="text-white/60 hover:text-white font-sans text-lg"
+              >
+                ✕
+              </button>
+            </div>
+            <form onSubmit={handleAddWorker} className="p-6 space-y-4 font-sans text-xs">
+              <div>
+                <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                  Full Name
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={newWorkerName}
+                  onChange={(e) => setNewWorkerName(e.target.value)}
+                  placeholder="e.g. Amos Danjuma"
+                  className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none"
+                />
+              </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs font-semibold">
-          <div className="p-3 bg-bg-farm rounded-xl border border-border-farm">
-            <span className="text-text-muted block text-[10px] uppercase font-bold">User Name:</span>
-            <span className="text-dark-green font-serif text-sm font-bold">{worker?.name || user?.email?.split('@')[0] || 'Admin'}</span>
-          </div>
-          <div className="p-3 bg-bg-farm rounded-xl border border-border-farm">
-            <span className="text-text-muted block text-[10px] uppercase font-bold">Email Address:</span>
-            <span className="text-text-primary text-xs font-mono">{user?.email || worker?.email || 'N/A'}</span>
-          </div>
-          <div className="p-3 bg-bg-farm rounded-xl border border-border-farm">
-            <span className="text-text-muted block text-[10px] uppercase font-bold">Assigned Permission Role:</span>
-            <span className="text-accent uppercase tracking-wider font-bold bg-dark-green px-2 py-0.5 rounded text-[10px] inline-block mt-0.5">
-              {role || 'admin'}
-            </span>
+              <div>
+                <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                  Email Address
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={newWorkerEmail}
+                  onChange={(e) => setNewWorkerEmail(e.target.value)}
+                  placeholder="e.g. amos@fazky.com"
+                  className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none font-mono"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                    System Role
+                  </label>
+                  <select
+                    value={newWorkerRole}
+                    onChange={(e) => setNewWorkerRole(e.target.value)}
+                    className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none font-bold text-text-primary"
+                  >
+                    <option value="staff">Staff (Worker)</option>
+                    <option value="manager">Manager</option>
+                    <option value="admin">Administrator</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                    Salary (₦/mo)
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min="0"
+                    value={newWorkerSalary}
+                    onChange={(e) => setNewWorkerSalary(e.target.value)}
+                    placeholder="45000"
+                    className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none font-semibold font-mono"
+                  />
+                </div>
+              </div>
+
+              {/* Initial Password Field */}
+              <div>
+                <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                  Initial Password (Optional — for instant login)
+                </label>
+                <div className="relative">
+                  <input
+                    type={showNewWorkerPass ? 'text' : 'password'}
+                    value={newWorkerPassword}
+                    onChange={(e) => setNewWorkerPassword(e.target.value)}
+                    placeholder="Leave empty to send email invite"
+                    className="w-full bg-bg-farm border border-border-farm rounded-lg pl-3 pr-10 py-2 text-sm focus:outline-none font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewWorkerPass(!showNewWorkerPass)}
+                    className="absolute right-3 top-2.5 text-text-muted hover:text-text-primary"
+                  >
+                    {showNewWorkerPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <p className="text-[10px] text-text-muted mt-1">
+                  If provided, worker can sign in immediately with this password.
+                </p>
+              </div>
+
+              <div className="flex gap-3 justify-end pt-4 border-t border-border-farm">
+                <button
+                  type="button"
+                  onClick={() => setShowAddWorkerModal(false)}
+                  className="px-4 py-2 border border-border-farm hover:bg-bg-farm rounded-lg font-bold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={workerActionLoading}
+                  className="px-4 py-2 bg-primary hover:bg-dark-green text-white rounded-lg font-bold shadow-sm disabled:opacity-50"
+                >
+                  {workerActionLoading ? 'Creating...' : 'Create Worker Account'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
-      </div>
+      )}
+
+      {/* ─── MODAL 2: CONFIRM DELETE WORKER (REQUIRES ADMIN PASSWORD) ─── */}
+      {workerToDelete && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-2xl border border-border-farm shadow-2xl max-w-[400px] w-full overflow-hidden animate-scale-in">
+            <div className="bg-red-700 p-4 text-white font-serif font-bold text-base flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <ShieldAlert className="w-5 h-5 text-amber-300" />
+                <span>Confirm User Deletion</span>
+              </div>
+              <button 
+                onClick={() => setWorkerToDelete(null)}
+                className="text-white/60 hover:text-white font-sans text-lg"
+              >
+                ✕
+              </button>
+            </div>
+            <form onSubmit={handleConfirmDeleteWorker} className="p-6 space-y-4 font-sans text-xs">
+              <p className="text-text-primary text-xs leading-relaxed">
+                You are about to permanently delete worker <strong>{workerToDelete.name}</strong> ({workerToDelete.email}).
+              </p>
+
+              <div className="p-3 bg-red-50 border border-red-200 text-red-accent rounded-xl space-y-1">
+                <div className="font-bold flex items-center gap-1">
+                  <Lock className="w-3.5 h-3.5" />
+                  <span>Admin Authorization Required</span>
+                </div>
+                <p className="text-[11px]">
+                  Please enter your admin password below to confirm this permanent action:
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                  Admin Password
+                </label>
+                <input
+                  type="password"
+                  required
+                  autoFocus
+                  value={adminAuthPassword}
+                  onChange={(e) => setAdminAuthPassword(e.target.value)}
+                  placeholder="Enter your login password"
+                  className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+                />
+              </div>
+
+              {deleteConfirmError && (
+                <div className="text-red-accent font-bold text-xs flex items-center gap-1">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  <span>{deleteConfirmError}</span>
+                </div>
+              )}
+
+              <div className="flex gap-3 justify-end pt-4 border-t border-border-farm">
+                <button
+                  type="button"
+                  onClick={() => setWorkerToDelete(null)}
+                  className="px-4 py-2 border border-border-farm hover:bg-bg-farm rounded-lg font-bold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={workerActionLoading}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold shadow-sm disabled:opacity-50"
+                >
+                  {workerActionLoading ? 'Verifying...' : 'Authorize & Delete'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

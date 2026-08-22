@@ -1,33 +1,23 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { KeyRound, Mail, Sparkles, AlertCircle, ArrowRight, ShieldCheck, UserCheck } from 'lucide-react';
-import { getCachedData } from '../lib/offlineQueue';
+import { KeyRound, Mail, Sparkles, AlertCircle, ArrowRight, ShieldCheck, Lock, Eye, EyeOff } from 'lucide-react';
 
 export default function LoginPage() {
-  const { login, loginWithMagicLink, loginWithGoogle, isSimulationMode } = useAuth();
+  const { login, loginWithMagicLink, loginWithGoogle } = useAuth();
   
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [magicEmail, setMagicEmail] = useState('');
   
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [seedWorkers, setSeedWorkers] = useState([]);
-
-  useEffect(() => {
-    // Fetch local workers to populate the quick login selector
-    const loadSeedWorkers = async () => {
-      const workers = await getCachedData('workers');
-      setSeedWorkers(workers || []);
-    };
-    loadSeedWorkers();
-  }, []);
 
   const handlePasswordLogin = async (e) => {
     e.preventDefault();
     if (!email) return setError('Email is required');
-    if (!isSimulationMode && !password) return setError('Password is required');
+    if (!password) return setError('Password is required');
     
     setError('');
     setSuccess('');
@@ -69,17 +59,6 @@ export default function LoginPage() {
     }
   };
 
-  const handleQuickLogin = async (workerEmail) => {
-    setError('');
-    setSuccess('');
-    setSubmitting(true);
-    const res = await login(workerEmail, '');
-    if (!res.success) {
-      setError(res.error || 'Quick login failed.');
-      setSubmitting(false);
-    }
-  };
-
   return (
     <div className="min-h-screen bg-bg-farm flex items-center justify-center p-4">
       <div className="max-w-md w-full bg-white rounded-2xl shadow-xl border border-border-farm overflow-hidden">
@@ -87,7 +66,7 @@ export default function LoginPage() {
         <div className="bg-dark-green p-8 text-center text-white relative">
           <div className="absolute top-3 right-3 bg-accent text-dark-green text-xs font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-sm">
             <Sparkles className="w-3 h-3" />
-            {isSimulationMode ? 'Simulation Mode' : 'Supabase Live'}
+            Supabase Live
           </div>
           
           <div className="flex justify-center mb-2">
@@ -121,6 +100,7 @@ export default function LoginPage() {
               <div className="relative">
                 <input
                   type="email"
+                  required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="name@fazky.com"
@@ -130,50 +110,53 @@ export default function LoginPage() {
               </div>
             </div>
 
-            {!isSimulationMode && (
-              <div>
-                <label className="block text-xs font-bold text-text-muted uppercase tracking-wider mb-1">
-                  Password
-                </label>
-                <div className="relative">
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full bg-bg-farm border border-border-farm rounded-lg pl-10 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent transition-all"
-                  />
-                  <KeyRound className="w-4 h-4 text-text-muted absolute left-3 top-3" />
-                </div>
+            <div>
+              <label className="block text-xs font-bold text-text-muted uppercase tracking-wider mb-1">
+                Password
+              </label>
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full bg-bg-farm border border-border-farm rounded-lg pl-10 pr-10 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent transition-all"
+                />
+                <KeyRound className="w-4 h-4 text-text-muted absolute left-3 top-3" />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-2.5 text-text-muted hover:text-text-primary"
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
               </div>
-            )}
+            </div>
 
             <button
               type="submit"
               disabled={submitting}
-              className="w-full bg-primary hover:bg-dark-green text-white font-medium py-2 rounded-lg text-sm transition-colors flex items-center justify-center gap-1.5 shadow-md disabled:opacity-50"
+              className="w-full bg-primary hover:bg-dark-green text-white font-medium py-2.5 rounded-lg text-sm transition-colors flex items-center justify-center gap-2 shadow-md disabled:opacity-50"
             >
-              Sign In with Credentials
+              {submitting ? 'Authenticating...' : 'Sign In'}
               <ArrowRight className="w-4 h-4" />
             </button>
           </form>
 
-          {/* Divider */}
           <div className="relative flex py-2 items-center">
             <div className="flex-grow border-t border-border-farm"></div>
-            <span className="flex-shrink mx-4 text-text-muted text-xs font-bold uppercase tracking-widest">
-              or
-            </span>
+            <span className="flex-shrink mx-4 text-text-muted text-xs uppercase font-medium">Or</span>
             <div className="flex-grow border-t border-border-farm"></div>
           </div>
 
           {/* Method 2: Magic Link */}
-          <form onSubmit={handleMagicLinkLogin} className="space-y-3">
+          <form onSubmit={handleMagicLinkLogin} className="space-y-4">
             <div>
               <label className="block text-xs font-bold text-text-muted uppercase tracking-wider mb-1">
-                Sign in with Magic Link
+                Sign in with Email Link
               </label>
-              <div className="relative flex gap-2">
+              <div className="flex gap-2">
                 <div className="relative flex-grow">
                   <input
                     type="email"
@@ -221,57 +204,6 @@ export default function LoginPage() {
             </svg>
             Sign In with Google
           </button>
-
-          {/* Developer Quick Login - Premium Simulation View */}
-          {isSimulationMode && seedWorkers.length > 0 && (
-            <div className="mt-8 pt-6 border-t border-border-farm bg-light-green p-4 rounded-xl border border-dashed border-accent">
-              <div className="flex items-center gap-1.5 text-dark-green font-serif text-sm font-bold mb-3">
-                <UserCheck className="w-4 h-4 text-primary" />
-                <span>Simulation Quick Login</span>
-              </div>
-              <p className="text-xs text-text-muted mb-4 font-sans leading-relaxed">
-                Click any seeded account profile below to login instantly as that role.
-              </p>
-              
-              <div className="grid grid-cols-2 gap-2">
-                {/* Admin */}
-                <button
-                  onClick={() => handleQuickLogin('admin@fazky.com')}
-                  className="bg-white hover:bg-primary hover:text-white border border-border-farm rounded-lg p-2 text-left text-xs transition-all shadow-sm group"
-                >
-                  <div className="font-bold text-text-primary group-hover:text-white">Admin User</div>
-                  <div className="text-[10px] text-text-muted group-hover:text-light-green">Full Access</div>
-                </button>
-
-                {/* Manager */}
-                <button
-                  onClick={() => handleQuickLogin('manager@fazky.com')}
-                  className="bg-white hover:bg-primary hover:text-white border border-border-farm rounded-lg p-2 text-left text-xs transition-all shadow-sm group"
-                >
-                  <div className="font-bold text-text-primary group-hover:text-white">Manager User</div>
-                  <div className="text-[10px] text-text-muted group-hover:text-light-green">General Records</div>
-                </button>
-
-                {/* Staff: Muslimat */}
-                <button
-                  onClick={() => handleQuickLogin('muslimat@fazky.com')}
-                  className="bg-white hover:bg-primary hover:text-white border border-border-farm rounded-lg p-2 text-left text-xs transition-all shadow-sm group"
-                >
-                  <div className="font-bold text-text-primary group-hover:text-white">Muslimat (Staff)</div>
-                  <div className="text-[10px] text-text-muted group-hover:text-light-green">Muslimat Pen Only</div>
-                </button>
-
-                {/* Staff: Iya Arishe */}
-                <button
-                  onClick={() => handleQuickLogin('iyaarishe@fazky.com')}
-                  className="bg-white hover:bg-primary hover:text-white border border-border-farm rounded-lg p-2 text-left text-xs transition-all shadow-sm group"
-                >
-                  <div className="font-bold text-text-primary group-hover:text-white">Iya Arishe (Staff)</div>
-                  <div className="text-[10px] text-text-muted group-hover:text-light-green">Iya Arishe Pen Only</div>
-                </button>
-              </div>
-            </div>
-          )}
         </div>
       </div>
     </div>

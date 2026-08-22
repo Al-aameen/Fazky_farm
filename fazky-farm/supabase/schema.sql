@@ -212,16 +212,25 @@ CREATE TABLE IF NOT EXISTS feed_inventory_log (
 
 -- Helper: Get current worker role
 -- Uses (select auth.uid()) so the value is evaluated once per query, not once per row.
+-- search_path = '' with schema-qualified names prevents search-path injection.
 CREATE OR REPLACE FUNCTION public.my_role()
 RETURNS TEXT AS $$
   SELECT role FROM public.workers WHERE auth_user_id = (SELECT auth.uid()) LIMIT 1;
-$$ LANGUAGE sql SECURITY DEFINER SET search_path = public;
+$$ LANGUAGE sql SECURITY DEFINER SET search_path = '';
 
 -- Helper: Get current worker ID
 CREATE OR REPLACE FUNCTION public.my_worker_id()
 RETURNS UUID AS $$
   SELECT id FROM public.workers WHERE auth_user_id = (SELECT auth.uid()) LIMIT 1;
-$$ LANGUAGE sql SECURITY DEFINER SET search_path = public;
+$$ LANGUAGE sql SECURITY DEFINER SET search_path = '';
+
+-- Revoke direct REST API call access for unauthenticated users.
+-- my_role() and my_worker_id() must remain SECURITY DEFINER (so RLS policies can call
+-- them without being blocked by their own row-level checks on the workers table),
+-- but anon should never be able to invoke them via /rest/v1/rpc/.
+-- authenticated retains EXECUTE because RLS policies implicitly invoke these functions.
+REVOKE EXECUTE ON FUNCTION public.my_role()      FROM anon;
+REVOKE EXECUTE ON FUNCTION public.my_worker_id() FROM anon;
 
 -- Enable Row Level Security on all tables
 ALTER TABLE workers ENABLE ROW LEVEL SECURITY;
@@ -241,145 +250,233 @@ ALTER TABLE off_pays ENABLE ROW LEVEL SECURITY;
 ALTER TABLE feed_inventory ENABLE ROW LEVEL SECURITY;
 ALTER TABLE feed_inventory_log ENABLE ROW LEVEL SECURITY;
 
+-- ── Grants ────────────────────────────────────────────────────────────────────
+-- Supabase docs: "Adding policies doesn't remove existing grants."
+-- This is a private farm management app — no unauthenticated (anon) access on any table.
+-- Step 1: Revoke all default grants from anon and authenticated.
+-- Step 2: Grant back only what the app needs, to authenticated only.
+-- service_role is NOT revoked here — it bypasses RLS and is only used server-side.
+REVOKE ALL ON TABLE public.workers            FROM anon, authenticated;
+REVOKE ALL ON TABLE public.pen_blocks         FROM anon, authenticated;
+REVOKE ALL ON TABLE public.pens               FROM anon, authenticated;
+REVOKE ALL ON TABLE public.census_counts      FROM anon, authenticated;
+REVOKE ALL ON TABLE public.general_census     FROM anon, authenticated;
+REVOKE ALL ON TABLE public.production_log     FROM anon, authenticated;
+REVOKE ALL ON TABLE public.sales_log          FROM anon, authenticated;
+REVOKE ALL ON TABLE public.egg_price_settings FROM anon, authenticated;
+REVOKE ALL ON TABLE public.expenses_log       FROM anon, authenticated;
+REVOKE ALL ON TABLE public.maize_records      FROM anon, authenticated;
+REVOKE ALL ON TABLE public.feed_production    FROM anon, authenticated;
+REVOKE ALL ON TABLE public.loans              FROM anon, authenticated;
+REVOKE ALL ON TABLE public.loan_repayments    FROM anon, authenticated;
+REVOKE ALL ON TABLE public.off_pays           FROM anon, authenticated;
+REVOKE ALL ON TABLE public.feed_inventory     FROM anon, authenticated;
+REVOKE ALL ON TABLE public.feed_inventory_log FROM anon, authenticated;
+
+-- Grant exactly what authenticated users need (RLS policies further restrict which rows).
+-- anon gets nothing — the app requires login for everything.
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.workers            TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.pen_blocks         TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.pens               TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.census_counts      TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.general_census     TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.production_log     TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sales_log          TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.egg_price_settings TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.expenses_log       TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.maize_records      TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.feed_production    TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.loans              TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.loan_repayments    TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.off_pays           TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.feed_inventory     TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.feed_inventory_log TO authenticated;
+
 -- RLS Policies
 -- (DROP IF EXISTS first — makes this script safe to re-run on an existing database)
+-- All policies carry an explicit TO authenticated clause.
+-- This stops Postgres from evaluating the policy expression for anon requests at all.
 
 -- Workers policies
 DROP POLICY IF EXISTS workers_select ON workers;
 DROP POLICY IF EXISTS workers_all_admin ON workers;
-CREATE POLICY workers_select ON workers FOR SELECT USING (
+CREATE POLICY workers_select ON workers
+FOR SELECT TO authenticated
+USING (
   (SELECT auth.uid()) = auth_user_id OR my_role() IN ('admin', 'manager')
 );
-CREATE POLICY workers_all_admin ON workers FOR ALL USING (
+CREATE POLICY workers_all_admin ON workers
+FOR ALL TO authenticated
+USING (
   my_role() = 'admin'
 );
 
 -- Pen Blocks policies
+-- auth.role() = 'authenticated' replaced with TO authenticated (docs anti-pattern fix)
 DROP POLICY IF EXISTS pen_blocks_select ON pen_blocks;
 DROP POLICY IF EXISTS pen_blocks_all_admin ON pen_blocks;
-CREATE POLICY pen_blocks_select ON pen_blocks FOR SELECT USING (
-  auth.role() = 'authenticated'
-);
-CREATE POLICY pen_blocks_all_admin ON pen_blocks FOR ALL USING (
+CREATE POLICY pen_blocks_select ON pen_blocks
+FOR SELECT TO authenticated
+USING (true);
+CREATE POLICY pen_blocks_all_admin ON pen_blocks
+FOR ALL TO authenticated
+USING (
   my_role() = 'admin'
 );
 
 -- Pens policies
 DROP POLICY IF EXISTS pens_select ON pens;
 DROP POLICY IF EXISTS pens_all_admin ON pens;
-CREATE POLICY pens_select ON pens FOR SELECT USING (
+CREATE POLICY pens_select ON pens
+FOR SELECT TO authenticated
+USING (
   my_role() IN ('admin', 'manager') OR worker_id = my_worker_id()
 );
-CREATE POLICY pens_all_admin ON pens FOR ALL USING (
+CREATE POLICY pens_all_admin ON pens
+FOR ALL TO authenticated
+USING (
   my_role() = 'admin'
 );
 
 -- Census Counts policies
 DROP POLICY IF EXISTS census_counts_select ON census_counts;
 DROP POLICY IF EXISTS census_counts_modify ON census_counts;
-CREATE POLICY census_counts_select ON census_counts FOR SELECT USING (
+CREATE POLICY census_counts_select ON census_counts
+FOR SELECT TO authenticated
+USING (
   my_role() IN ('admin', 'manager') OR pen_id IN (SELECT id FROM pens WHERE worker_id = my_worker_id())
 );
-CREATE POLICY census_counts_modify ON census_counts FOR ALL USING (
+CREATE POLICY census_counts_modify ON census_counts
+FOR ALL TO authenticated
+USING (
   my_role() IN ('admin', 'manager') OR pen_id IN (SELECT id FROM pens WHERE worker_id = my_worker_id())
 );
 
 -- General Census policies
 DROP POLICY IF EXISTS general_census_all ON general_census;
-CREATE POLICY general_census_all ON general_census FOR ALL USING (
+CREATE POLICY general_census_all ON general_census
+FOR ALL TO authenticated
+USING (
   my_role() IN ('admin', 'manager')
 );
 
 -- Production Log policies
 DROP POLICY IF EXISTS production_log_select ON production_log;
 DROP POLICY IF EXISTS production_log_modify ON production_log;
-CREATE POLICY production_log_select ON production_log FOR SELECT USING (
+CREATE POLICY production_log_select ON production_log
+FOR SELECT TO authenticated
+USING (
   my_role() IN ('admin', 'manager') OR pen_id IN (SELECT id FROM pens WHERE worker_id = my_worker_id())
 );
-CREATE POLICY production_log_modify ON production_log FOR ALL USING (
+CREATE POLICY production_log_modify ON production_log
+FOR ALL TO authenticated
+USING (
   my_role() IN ('admin', 'manager') OR pen_id IN (SELECT id FROM pens WHERE worker_id = my_worker_id())
 );
 
 -- Sales Log policies
 DROP POLICY IF EXISTS sales_log_all ON sales_log;
-CREATE POLICY sales_log_all ON sales_log FOR ALL USING (
+CREATE POLICY sales_log_all ON sales_log
+FOR ALL TO authenticated
+USING (
   my_role() IN ('admin', 'manager')
 );
 
 -- Egg Price Settings policies
+-- auth.role() = 'authenticated' replaced with TO authenticated (docs anti-pattern fix)
 DROP POLICY IF EXISTS egg_price_settings_select ON egg_price_settings;
 DROP POLICY IF EXISTS egg_price_settings_all_admin ON egg_price_settings;
-CREATE POLICY egg_price_settings_select ON egg_price_settings FOR SELECT USING (
-  auth.role() = 'authenticated'
-);
-CREATE POLICY egg_price_settings_all_admin ON egg_price_settings FOR ALL USING (
+CREATE POLICY egg_price_settings_select ON egg_price_settings
+FOR SELECT TO authenticated
+USING (true);
+CREATE POLICY egg_price_settings_all_admin ON egg_price_settings
+FOR ALL TO authenticated
+USING (
   my_role() = 'admin'
 );
 
 -- Expenses Log policies
 DROP POLICY IF EXISTS expenses_log_all ON expenses_log;
-CREATE POLICY expenses_log_all ON expenses_log FOR ALL USING (
+CREATE POLICY expenses_log_all ON expenses_log
+FOR ALL TO authenticated
+USING (
   my_role() IN ('admin', 'manager')
 );
 
 -- Maize Records policies
 DROP POLICY IF EXISTS maize_records_all ON maize_records;
-CREATE POLICY maize_records_all ON maize_records FOR ALL USING (
+CREATE POLICY maize_records_all ON maize_records
+FOR ALL TO authenticated
+USING (
   my_role() IN ('admin', 'manager')
 );
 
 -- Feed Production policies
 DROP POLICY IF EXISTS feed_production_all ON feed_production;
-CREATE POLICY feed_production_all ON feed_production FOR ALL USING (
+CREATE POLICY feed_production_all ON feed_production
+FOR ALL TO authenticated
+USING (
   my_role() IN ('admin', 'manager')
 );
 
 -- Loans policies
 DROP POLICY IF EXISTS loans_all ON loans;
-CREATE POLICY loans_all ON loans FOR ALL USING (
+CREATE POLICY loans_all ON loans
+FOR ALL TO authenticated
+USING (
   my_role() = 'admin'
 );
 
 -- Loan Repayments policies
 DROP POLICY IF EXISTS loan_repayments_all ON loan_repayments;
-CREATE POLICY loan_repayments_all ON loan_repayments FOR ALL USING (
+CREATE POLICY loan_repayments_all ON loan_repayments
+FOR ALL TO authenticated
+USING (
   my_role() = 'admin'
 );
 
 -- Off-pays policies
 DROP POLICY IF EXISTS off_pays_all ON off_pays;
-CREATE POLICY off_pays_all ON off_pays FOR ALL USING (
+CREATE POLICY off_pays_all ON off_pays
+FOR ALL TO authenticated
+USING (
   my_role() = 'admin'
 );
 
 -- Feed Inventory policies
 DROP POLICY IF EXISTS feed_inventory_select ON feed_inventory;
 DROP POLICY IF EXISTS feed_inventory_all_admin ON feed_inventory;
-CREATE POLICY feed_inventory_select ON feed_inventory FOR SELECT USING (
+CREATE POLICY feed_inventory_select ON feed_inventory
+FOR SELECT TO authenticated
+USING (
   my_role() IN ('admin', 'manager')
 );
-CREATE POLICY feed_inventory_all_admin ON feed_inventory FOR ALL USING (
+CREATE POLICY feed_inventory_all_admin ON feed_inventory
+FOR ALL TO authenticated
+USING (
   my_role() = 'admin'
 );
 
 -- Feed Inventory Log policies
 DROP POLICY IF EXISTS feed_inventory_log_select ON feed_inventory_log;
 DROP POLICY IF EXISTS feed_inventory_log_all_admin ON feed_inventory_log;
-CREATE POLICY feed_inventory_log_select ON feed_inventory_log FOR SELECT USING (
+CREATE POLICY feed_inventory_log_select ON feed_inventory_log
+FOR SELECT TO authenticated
+USING (
   my_role() IN ('admin', 'manager')
 );
-CREATE POLICY feed_inventory_log_all_admin ON feed_inventory_log FOR ALL USING (
+CREATE POLICY feed_inventory_log_all_admin ON feed_inventory_log
+FOR ALL TO authenticated
+USING (
   my_role() = 'admin'
 );
-
-
 
 -- =========================================================================
 -- DATABASE TRIGGERS
 -- =========================================================================
 
 -- Trigger function: Mortality Auto-Deduction from Census Matrix
-CREATE OR REPLACE FUNCTION handle_production_mortality()
+CREATE OR REPLACE FUNCTION public.handle_production_mortality()
 RETURNS TRIGGER AS $$
 DECLARE
   r RECORD;
@@ -392,30 +489,28 @@ BEGIN
   END IF;
 
   IF deduction <> 0 THEN
-    -- Find and subtract from census count slots sequentially, starting from slot 1
     FOR r IN 
       SELECT id, bird_count, slot_number 
-      FROM census_counts 
+      FROM public.census_counts 
       WHERE pen_id = NEW.pen_id AND date = NEW.date 
       ORDER BY slot_number ASC
     LOOP
       IF deduction > 0 THEN
         IF r.bird_count >= deduction THEN
-          UPDATE census_counts 
+          UPDATE public.census_counts 
           SET bird_count = bird_count - deduction 
           WHERE id = r.id;
           deduction := 0;
           EXIT;
         ELSE
-          UPDATE census_counts 
+          UPDATE public.census_counts 
           SET bird_count = 0 
           WHERE id = r.id;
           deduction := deduction - r.bird_count;
         END IF;
       ELSIF deduction < 0 THEN
-        -- Add birds back if typo was corrected
-        UPDATE census_counts 
-        SET bird_count = bird_count - deduction -- double minus is addition
+        UPDATE public.census_counts 
+        SET bird_count = bird_count - deduction
         WHERE id = r.id;
         deduction := 0;
         EXIT;
@@ -425,7 +520,7 @@ BEGIN
   
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SET search_path = '';
 
 DROP TRIGGER IF EXISTS production_mortality_trigger ON production_log;
 CREATE TRIGGER production_mortality_trigger
@@ -435,7 +530,7 @@ EXECUTE FUNCTION handle_production_mortality();
 
 
 -- Trigger function: Feed Inventory Auto-Deduction (Phase 2)
-CREATE OR REPLACE FUNCTION handle_production_feed_deduction()
+CREATE OR REPLACE FUNCTION public.handle_production_feed_deduction()
 RETURNS TRIGGER AS $$
 DECLARE
   feed_used NUMERIC;
@@ -453,23 +548,22 @@ BEGIN
   END IF;
 
   IF diff <> 0 THEN
-    -- Look for 'Layers Feed' in inventory
-    SELECT id INTO inv_id FROM feed_inventory WHERE item_name = 'Layers Feed' LIMIT 1;
+    SELECT id INTO inv_id FROM public.feed_inventory WHERE item_name = 'Layers Feed' LIMIT 1;
     
     IF inv_id IS NOT NULL THEN
-      UPDATE feed_inventory 
+      UPDATE public.feed_inventory 
       SET current_stock = current_stock - diff,
           last_updated = NOW()
       WHERE id = inv_id;
       
-      INSERT INTO feed_inventory_log (inventory_id, date, change_amount, change_type, source, notes)
+      INSERT INTO public.feed_inventory_log (inventory_id, date, change_amount, change_type, source, notes)
       VALUES (inv_id, NEW.date, -diff, 'consumption', 'Production Log', 'Auto-deduction from Production Log (Pen ID: ' || NEW.pen_id || ')');
     END IF;
   END IF;
   
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SET search_path = '';
 
 DROP TRIGGER IF EXISTS production_feed_deduction_trigger ON production_log;
 CREATE TRIGGER production_feed_deduction_trigger
@@ -485,13 +579,13 @@ EXECUTE FUNCTION handle_production_feed_deduction();
 -- =========================================================================
 
 -- Shared trigger function: stamps updated_at on every UPDATE
-CREATE OR REPLACE FUNCTION set_updated_at()
+CREATE OR REPLACE FUNCTION public.set_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
   NEW.updated_at = NOW();
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SET search_path = '';
 
 -- Attach updated_at trigger to all 16 tables
 -- (census_counts already has the column declared above; all others get it via ALTER TABLE)
@@ -634,18 +728,32 @@ ALTER TABLE batches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE grower_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE flock_sales ENABLE ROW LEVEL SECURITY;
 
+-- Grants for flock lifecycle tables (same pattern as original 16 tables above)
+REVOKE ALL ON TABLE public.batches     FROM anon, authenticated;
+REVOKE ALL ON TABLE public.grower_logs FROM anon, authenticated;
+REVOKE ALL ON TABLE public.flock_sales FROM anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.batches     TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.grower_logs TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.flock_sales TO authenticated;
+
 DROP POLICY IF EXISTS batches_all ON batches;
-CREATE POLICY batches_all ON batches FOR ALL USING (
+CREATE POLICY batches_all ON batches
+FOR ALL TO authenticated
+USING (
   my_role() IN ('admin', 'manager')
 );
 
 DROP POLICY IF EXISTS grower_logs_all ON grower_logs;
-CREATE POLICY grower_logs_all ON grower_logs FOR ALL USING (
+CREATE POLICY grower_logs_all ON grower_logs
+FOR ALL TO authenticated
+USING (
   my_role() IN ('admin', 'manager')
 );
 
 DROP POLICY IF EXISTS flock_sales_all ON flock_sales;
-CREATE POLICY flock_sales_all ON flock_sales FOR ALL USING (
+CREATE POLICY flock_sales_all ON flock_sales
+FOR ALL TO authenticated
+USING (
   my_role() IN ('admin', 'manager')
 );
 
@@ -663,8 +771,11 @@ CREATE TRIGGER trg_grower_logs_updated_at
 CREATE TRIGGER trg_flock_sales_updated_at
   BEFORE UPDATE ON flock_sales FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- Trigger: auto-deduct sold birds from census_counts (same logic as mortality trigger)
-CREATE OR REPLACE FUNCTION fn_deduct_sold_birds_from_census()
+-- Trigger function: auto-deduct sold birds from census_counts
+-- SECURITY DEFINER removed — trigger functions run as the table owner automatically.
+-- Removing it also eliminates the linter warning about anon/authenticated
+-- being able to call a SECURITY DEFINER function directly via the REST API.
+CREATE OR REPLACE FUNCTION public.fn_deduct_sold_birds_from_census()
 RETURNS TRIGGER AS $$
 DECLARE
   v_remaining INT := NEW.quantity_sold;
@@ -673,23 +784,23 @@ BEGIN
   IF NEW.source_type = 'pen' AND NEW.pen_id IS NOT NULL AND NEW.quantity_sold > 0 THEN
     FOR r_slot IN
       SELECT id, bird_count
-      FROM census_counts
+      FROM public.census_counts
       WHERE pen_id = NEW.pen_id AND date = NEW.date AND bird_count > 0
       ORDER BY slot_number ASC
     LOOP
       IF v_remaining <= 0 THEN EXIT; END IF;
       IF r_slot.bird_count >= v_remaining THEN
-        UPDATE census_counts SET bird_count = bird_count - v_remaining WHERE id = r_slot.id;
+        UPDATE public.census_counts SET bird_count = bird_count - v_remaining WHERE id = r_slot.id;
         v_remaining := 0;
       ELSE
         v_remaining := v_remaining - r_slot.bird_count;
-        UPDATE census_counts SET bird_count = 0 WHERE id = r_slot.id;
+        UPDATE public.census_counts SET bird_count = 0 WHERE id = r_slot.id;
       END IF;
     END LOOP;
   END IF;
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql SET search_path = '';
 
 DROP TRIGGER IF EXISTS trg_deduct_flock_sales ON flock_sales;
 CREATE TRIGGER trg_deduct_flock_sales
@@ -738,3 +849,81 @@ CREATE INDEX IF NOT EXISTS idx_grower_logs_batch_id         ON public.grower_log
 CREATE INDEX IF NOT EXISTS idx_grower_logs_date             ON public.grower_logs       (date);
 CREATE INDEX IF NOT EXISTS idx_flock_sales_pen_id           ON public.flock_sales       (pen_id);
 CREATE INDEX IF NOT EXISTS idx_flock_sales_batch_id         ON public.flock_sales       (batch_id);
+
+-- ─── Part 7: Additive patch — Worker Avatar & Admin Delete Security ─────────
+ALTER TABLE public.workers ADD COLUMN IF NOT EXISTS avatar TEXT;
+ALTER TABLE public.workers ADD COLUMN IF NOT EXISTS delete_pin TEXT;
+
+-- ─── Part 8: Default Reference Data (Idempotent) ─────────────────────────────
+-- Ensure standard Pen Blocks exist
+INSERT INTO public.pen_blocks (name, display_order)
+VALUES 
+  ('Pen Block A', 1),
+  ('Pen Block B', 2),
+  ('Pen Block C', 3),
+  ('Pen Block D', 4)
+ON CONFLICT (name) DO NOTHING;
+
+-- Ensure standard Pens exist under each Pen Block
+DO $$
+DECLARE
+  v_pb_a UUID;
+  v_pb_b UUID;
+  v_pb_c UUID;
+  v_pb_d UUID;
+BEGIN
+  SELECT id INTO v_pb_a FROM public.pen_blocks WHERE name = 'Pen Block A' LIMIT 1;
+  SELECT id INTO v_pb_b FROM public.pen_blocks WHERE name = 'Pen Block B' LIMIT 1;
+  SELECT id INTO v_pb_c FROM public.pen_blocks WHERE name = 'Pen Block C' LIMIT 1;
+  SELECT id INTO v_pb_d FROM public.pen_blocks WHERE name = 'Pen Block D' LIMIT 1;
+
+  IF v_pb_a IS NOT NULL THEN
+    INSERT INTO public.pens (pen_block_id, name, has_sides, slot_count, generation, display_order, is_active)
+    VALUES 
+      (v_pb_a, 'Muslimat Pen', false, 15, 'Batch 1', 1, true),
+      (v_pb_a, 'MM Pen', false, 15, 'Batch 1', 2, true),
+      (v_pb_a, 'Baba Farida Pen', false, 15, 'Batch 2', 3, true),
+      (v_pb_a, 'Iya Opeyemi Pen', false, 15, 'Batch 2', 4, true)
+    ON CONFLICT (pen_block_id, name) DO NOTHING;
+  END IF;
+
+  IF v_pb_b IS NOT NULL THEN
+    INSERT INTO public.pens (pen_block_id, name, has_sides, slot_count, generation, display_order, is_active)
+    VALUES 
+      (v_pb_b, 'Iya Arishe Pen', true, 14, 'Batch 3', 1, true),
+      (v_pb_b, 'Iya Farida Pen', true, 13, 'Batch 3', 2, true)
+    ON CONFLICT (pen_block_id, name) DO NOTHING;
+  END IF;
+
+  IF v_pb_c IS NOT NULL THEN
+    INSERT INTO public.pens (pen_block_id, name, has_sides, slot_count, generation, display_order, is_active)
+    VALUES 
+      (v_pb_c, 'Iya Zainab / Arisha Pen', true, 14, 'Batch 4', 1, true),
+      (v_pb_c, 'Alfa Taye Pen', true, 13, 'Batch 4', 2, true)
+    ON CONFLICT (pen_block_id, name) DO NOTHING;
+  END IF;
+
+  IF v_pb_d IS NOT NULL THEN
+    INSERT INTO public.pens (pen_block_id, name, has_sides, slot_count, generation, display_order, is_active)
+    VALUES 
+      (v_pb_d, 'Amos Pen', false, 10, 'Batch 5', 1, true)
+    ON CONFLICT (pen_block_id, name) DO NOTHING;
+  END IF;
+END $$;
+
+-- Default Feed Inventory items
+INSERT INTO public.feed_inventory (item_name, unit, current_stock, low_stock_threshold)
+VALUES
+  ('Layers Feed', 'bags', 120, 20),
+  ('Maize', 'kg', 1500, 300),
+  ('Wheat Offal', 'bags', 45, 10),
+  ('Concentrate', 'bags', 60, 15),
+  ('Soya Beans', 'kg', 800, 150),
+  ('Premix', 'kg', 50, 10)
+ON CONFLICT (item_name) DO NOTHING;
+
+-- Default Egg Price Setting (if none exists)
+INSERT INTO public.egg_price_settings (price_per_crate, effective_date)
+SELECT 4400, '2026-01-01'
+WHERE NOT EXISTS (SELECT 1 FROM public.egg_price_settings LIMIT 1);
+
