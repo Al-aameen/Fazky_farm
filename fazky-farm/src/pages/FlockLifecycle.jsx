@@ -97,9 +97,10 @@ function GridCell({ value, onChange, type = 'number', placeholder = '0', readOnl
 
 // ─── Tab list ─────────────────────────────────────────────────────────────────
 const TABS = [
-  { id: 'batches', label: 'Batch Registry',       icon: ClipboardList },
-  { id: 'grower',  label: 'Grower Tracker',        icon: TrendingDown  },
-  { id: 'sales',   label: 'Flock Sales / Culling', icon: DollarSign    },
+  { id: 'batches', label: 'Batch Registry',           icon: ClipboardList },
+  { id: 'daily',   label: 'Daily Chick / Grower Logs', icon: Bird          },
+  { id: 'grower',  label: 'Weekly Grower Tracker',    icon: TrendingDown  },
+  { id: 'sales',   label: 'Flock Sales / Culling',    icon: DollarSign    },
 ];
 
 // =============================================================================
@@ -111,8 +112,9 @@ export default function FlockLifecycle() {
   const [expandedBatch, setExpandedBatch] = useState(null);
 
   // Modals
-  const [showBatchModal, setShowBatchModal] = useState(false);
-  const [showSaleModal,  setShowSaleModal]  = useState(false);
+  const [showBatchModal,    setShowBatchModal]    = useState(false);
+  const [showDailyLogModal, setShowDailyLogModal] = useState(false);
+  const [showSaleModal,     setShowSaleModal]     = useState(false);
 
   // ── Batch form ────────────────────────────────────────────────────────────
   const [batchName,   setBatchName]   = useState('');
@@ -122,6 +124,16 @@ export default function FlockLifecycle() {
   const [breed,       setBreed]       = useState('');
   const [costPerBird, setCostPerBird] = useState('');
   const [expectedLay, setExpectedLay] = useState('');
+
+  // ── Daily Chick Log Form (Item V) ─────────────────────────────────────────
+  const [dailyBatchId,    setDailyBatchId]    = useState('');
+  const [dailyDate,       setDailyDate]       = useState(todayStr());
+  const [dailyMortality,  setDailyMortality]  = useState(0);
+  const [dailyFeedBags,   setDailyFeedBags]   = useState('');
+  const [dailyWaterL,     setDailyWaterL]     = useState('');
+  const [dailyTempC,      setDailyTempC]      = useState('');
+  const [dailyNotes,      setDailyNotes]      = useState('');
+  const [dailyVaccine,    setDailyVaccine]    = useState('');
 
   // ── Sale form ─────────────────────────────────────────────────────────────
   const [saleDate,      setSaleDate]      = useState(todayStr());
@@ -134,7 +146,6 @@ export default function FlockLifecycle() {
   const [paymentMethod, setPaymentMethod] = useState('Cash');
 
   // ── Grower weekly grid ────────────────────────────────────────────────────
-  // growerGrid[batchId] holds the unsaved cell edits for the selected date
   const [growerDate, setGrowerDate] = useState(todayStr());
   const [growerGrid, setGrowerGrid] = useState({});   // { [batchId]: { headcount, avg_weight, ... } }
   const [gridSaving, setGridSaving] = useState(false);
@@ -143,10 +154,12 @@ export default function FlockLifecycle() {
   const [submitting, setSubmitting] = useState(false);
 
   // ── Data shortcuts ────────────────────────────────────────────────────────
-  const batches    = data.batches     || [];
-  const growerLogs = data.grower_logs || [];
-  const flockSales = data.flock_sales  || [];
-  const pens       = data.pens        || [];
+  const batches          = data.batches            || [];
+  const growerLogs       = data.grower_logs       || [];
+  const growerDailyLogs  = data.grower_daily_logs || [];
+  const flockSales       = data.flock_sales        || [];
+  const pens             = data.pens              || [];
+  const vaccinesList     = data.vaccination_schedules || [];
 
   const growingBatches = useMemo(
     () => batches.filter(b => b.status === 'growing'),
@@ -154,49 +167,41 @@ export default function FlockLifecycle() {
   );
 
   // ── Grid helpers ──────────────────────────────────────────────────────────
-  // Returns the existing DB row for batchId+growerDate if one exists
   const existingLog = useCallback(
     (batchId) => growerLogs.find(l => l.batch_id === batchId && l.date === growerDate),
     [growerLogs, growerDate]
   );
 
-  // Returns the effective row: DB data first, local edits on top
   const getGridRow = useCallback((batchId) => {
     const ex = existingLog(batchId);
+    const ed = growerGrid[batchId] || {};
     return {
-      headcount:     ex?.headcount     ?? '',
-      avg_weight:    ex?.avg_weight    ?? '',
-      feed_consumed: ex?.feed_consumed ?? '',
-      mortality:     ex?.mortality     ?? '',
-      health_notes:  ex?.health_notes  ?? '',
-      ...(growerGrid[batchId] || {}),
+      headcount:     ed.headcount     !== undefined ? ed.headcount     : (ex?.headcount     ?? ''),
+      avg_weight:    ed.avg_weight    !== undefined ? ed.avg_weight    : (ex?.avg_weight    ?? ''),
+      feed_consumed: ed.feed_consumed !== undefined ? ed.feed_consumed : (ex?.feed_consumed ?? ''),
+      mortality:     ed.mortality     !== undefined ? ed.mortality     : (ex?.mortality     ?? ''),
+      health_notes:  ed.health_notes  !== undefined ? ed.health_notes  : (ex?.health_notes  ?? ''),
     };
   }, [existingLog, growerGrid]);
 
-  const updateGridCell = (batchId, field, value) => {
-    setGridSaved(false);
+  const updateGridCell = (batchId, field, val) => {
     setGrowerGrid(prev => ({
       ...prev,
-      [batchId]: { ...getGridRow(batchId), [field]: value },
+      [batchId]: {
+        ...(prev[batchId] || {}),
+        [field]: val,
+      },
     }));
+    setGridSaved(false);
   };
 
-  // ── Derived totals ────────────────────────────────────────────────────────
-  const totalBirdsGrowing = growingBatches.reduce((s, b) => s + (parseInt(b.quantity_arrived) || 0), 0);
-  const totalRevenue       = flockSales.reduce((s, fs) => s + (parseFloat(fs.total_revenue)  || 0), 0);
-  const totalSold          = flockSales.reduce((s, fs) => s + (parseInt(fs.quantity_sold)    || 0), 0);
-
-  // ── Save all grower grid rows ─────────────────────────────────────────────
   const handleSaveAllGrowth = async () => {
-    // Only save rows that have at least headcount entered
-    const rows = growingBatches
-      .map(b => ({ batch: b, row: getGridRow(b.id) }))
-      .filter(({ row }) => String(row.headcount).trim() !== '');
-
-    if (rows.length === 0) return;
     setGridSaving(true);
     try {
-      for (const { batch, row } of rows) {
+      for (const batch of growingBatches) {
+        const row = getGridRow(batch.id);
+        if (!row.headcount || parseInt(row.headcount) <= 0) continue;
+
         const ex      = existingLog(batch.id);
         const payload = {
           batch_id:      batch.id,
@@ -242,10 +247,48 @@ export default function FlockLifecycle() {
     } finally { setSubmitting(false); }
   };
 
+  // ── Daily Chick Log Submit (Item V) ───────────────────────────────────────
+  const handleAddDailyChickLog = async (e) => {
+    e.preventDefault();
+    if (!dailyBatchId || !dailyDate) return;
+    setSubmitting(true);
+    try {
+      await insertRecord('grower_daily_logs', {
+        batch_id:             dailyBatchId,
+        date:                 dailyDate,
+        mortality:            parseInt(dailyMortality) || 0,
+        feed_consumed_kg:     dailyFeedBags ? (parseFloat(dailyFeedBags) * 25) : 0,
+        water_intake_liters:  dailyWaterL ? parseFloat(dailyWaterL) : 0,
+        temperature_celsius:  dailyTempC ? parseFloat(dailyTempC) : null,
+        behaviour_notes:      dailyNotes.trim() || null,
+        vaccine_administered: dailyVaccine.trim() || null
+      });
+      setShowDailyLogModal(false);
+      setDailyMortality(0);
+      setDailyFeedBags('');
+      setDailyWaterL('');
+      setDailyTempC('');
+      setDailyNotes('');
+      setDailyVaccine('');
+    } catch (err) {
+      console.error('Error saving daily chick log:', err);
+      alert('Error saving log: ' + err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // ── Graduation Guarded Strictly to Admin (Item XVI) ───────────────────────
   const handleGraduate = async (batch) => {
+    if (role !== 'admin') {
+      alert('🔒 Access Restricted: Only Farm Administrators are permitted to graduate batches into laying pens.');
+      return;
+    }
+
     if (!window.confirm(
-      `Graduate "${batch.batch_name}" to Laying status?\n\nThis marks the batch as 'laying'. Update the pen census manually.`
+      `Graduate "${batch.batch_name}" to Laying status?\n\nThis marks the batch as 'laying'. Please ensure target pens in the Bird Census are updated.`
     )) return;
+
     await updateRecord('batches', { id: batch.id, status: 'laying' });
   };
 
@@ -498,6 +541,97 @@ export default function FlockLifecycle() {
                           </tr>
                         )}
                       </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════ */}
+      {/*  TAB 2 — DAILY CHICK / BROODER LOGS (Item V)                       */}
+      {/* ══════════════════════════════════════════════════════════════════ */}
+      {activeTab === 'daily' && (
+        <div className="bg-white rounded-2xl border border-border-farm shadow-sm p-5 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border-farm pb-3">
+            <div>
+              <h3 className="font-serif font-bold text-dark-green text-sm flex items-center gap-2">
+                <Bird className="w-4 h-4 text-primary" />
+                <span>Daily Chick & Grower Logs</span>
+              </h3>
+              <p className="text-[11px] text-text-muted mt-0.5">
+                Record daily chick mortality, feed consumption, water intake (Liters), behaviour, and linked vaccines.
+              </p>
+            </div>
+            {canEdit && (
+              <button
+                onClick={() => {
+                  if (batches.length === 0) {
+                    alert('Please register at least one batch first.');
+                    return;
+                  }
+                  setDailyBatchId(batches[0].id);
+                  setShowDailyLogModal(true);
+                }}
+                className="bg-primary hover:bg-dark-green text-white font-bold px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition-all self-start sm:self-auto"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Log Daily Chick Activity</span>
+              </button>
+            )}
+          </div>
+
+          {growerDailyLogs.length === 0 ? (
+            <div className="p-8 text-center text-text-muted space-y-2">
+              <Bird className="w-8 h-8 mx-auto text-border-farm" />
+              <p className="text-xs font-bold">No daily chick logs recorded yet.</p>
+              <p className="text-[11px]">Click "Log Daily Chick Activity" above to record daily logs for your growing chicks.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-xl border border-border-farm">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="bg-bg-farm text-[10px] text-text-muted uppercase font-black border-b border-border-farm">
+                    <th className="p-3">Date</th>
+                    <th className="p-3">Batch</th>
+                    <th className="p-3 text-center">Mortality</th>
+                    <th className="p-3 text-center">Feed (Bags/kg)</th>
+                    <th className="p-3 text-center">Water (L)</th>
+                    <th className="p-3 text-center">Temp (°C)</th>
+                    <th className="p-3">Vaccine / Med</th>
+                    <th className="p-3">Behaviour / Notes</th>
+                    {canEdit && <th className="p-3 text-right">Action</th>}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border-farm/50">
+                  {[...growerDailyLogs].sort((a, b) => b.date.localeCompare(a.date)).map(dLog => {
+                    const batch = batches.find(b => b.id === dLog.batch_id);
+                    return (
+                      <tr key={dLog.id} className="hover:bg-bg-farm/40 transition-colors">
+                        <td className="p-3 font-semibold font-mono">{dLog.date}</td>
+                        <td className="p-3 font-bold text-dark-green">{batch?.batch_name || 'Batch'}</td>
+                        <td className="p-3 text-center font-bold text-red-600">{dLog.mortality || 0}</td>
+                        <td className="p-3 text-center font-mono">
+                          {dLog.feed_consumed_kg ? `${(dLog.feed_consumed_kg / 25).toFixed(1)} b (${dLog.feed_consumed_kg} kg)` : '—'}
+                        </td>
+                        <td className="p-3 text-center font-mono">{dLog.water_intake_liters ? `${dLog.water_intake_liters} L` : '—'}</td>
+                        <td className="p-3 text-center font-mono">{dLog.temperature_celsius ? `${dLog.temperature_celsius} °C` : '—'}</td>
+                        <td className="p-3 text-dark-green font-semibold">{dLog.vaccine_administered || '—'}</td>
+                        <td className="p-3 text-text-muted max-w-xs truncate">{dLog.behaviour_notes || '—'}</td>
+                        {canEdit && (
+                          <td className="p-3 text-right">
+                            <button
+                              onClick={() => deleteRecord('grower_daily_logs', dLog.id)}
+                              className="text-red-400 hover:text-red-600 p-1 transition-colors"
+                              title="Delete entry"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
+                        )}
+                      </tr>
                     );
                   })}
                 </tbody>
@@ -801,11 +935,11 @@ export default function FlockLifecycle() {
       {/*  MODALS                                                           */}
       {/* ══════════════════════════════════════════════════════════════════ */}
 
-      {/* Register New Batch */}
+      {/* Register New Batch (Fixed clean date inputs) */}
       {showBatchModal && (
         <Modal title="Register New Chick Batch" onClose={() => setShowBatchModal(false)}>
           <form onSubmit={handleAddBatch} className="space-y-4 font-sans text-xs">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="col-span-2">
                 <Field label="Batch Name *">
                   <input type="text" value={batchName} onChange={e => setBatchName(e.target.value)}
@@ -813,7 +947,7 @@ export default function FlockLifecycle() {
                 </Field>
               </div>
               <Field label="Arrival Date *">
-                <DatePicker value={arrivalDate} onChange={setArrivalDate} />
+                <input type="date" required value={arrivalDate} onChange={e => setArrivalDate(e.target.value)} className={inputCls} />
               </Field>
               <Field label="Quantity Arrived *">
                 <input type="number" min="1" value={qty} onChange={e => setQty(e.target.value)}
@@ -827,15 +961,15 @@ export default function FlockLifecycle() {
                 <input type="text" value={breed} onChange={e => setBreed(e.target.value)}
                   className={inputCls} placeholder="e.g. ISA Brown" />
               </Field>
-              <Field label="Cost per Bird (&#x20a6;)">
+              <Field label="Cost per Bird (₦)">
                 <input type="number" min="0" value={costPerBird} onChange={e => setCostPerBird(e.target.value)}
                   className={inputCls} placeholder="650" onFocus={e => e.target.select()} />
               </Field>
               <Field label="Expected Lay Date (Target laying period)">
-                <DatePicker value={expectedLay} onChange={setExpectedLay} allowFutureDates={true} />
+                <input type="date" value={expectedLay} onChange={e => setExpectedLay(e.target.value)} className={inputCls} />
               </Field>
             </div>
-            <div className="flex gap-2 pt-1">
+            <div className="flex gap-2 pt-2">
               <button type="button" onClick={() => setShowBatchModal(false)}
                 className="flex-1 py-2.5 bg-bg-farm text-text-primary font-bold text-xs rounded-xl border border-border-farm">
                 Cancel
@@ -843,6 +977,148 @@ export default function FlockLifecycle() {
               <button type="submit" disabled={submitting}
                 className="flex-1 py-2.5 bg-dark-green text-white font-bold text-xs rounded-xl hover:bg-emerald-900 shadow-sm transition-all">
                 {submitting ? 'Saving...' : 'Register Batch'}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Daily Chick & Brooder Log Modal (Item V) */}
+      {showDailyLogModal && (
+        <Modal title="Log Daily Chick Activity" onClose={() => setShowDailyLogModal(false)}>
+          <form onSubmit={handleAddDailyChickLog} className="space-y-3 font-sans text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <Field label="Chick Batch *">
+                  <select
+                    value={dailyBatchId}
+                    onChange={e => setDailyBatchId(e.target.value)}
+                    className={selectCls}
+                    required
+                  >
+                    {batches.map(b => (
+                      <option key={b.id} value={b.id}>
+                        {b.batch_name} ({b.status})
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
+
+              <div>
+                <Field label="Log Date *">
+                  <input
+                    type="date"
+                    required
+                    value={dailyDate}
+                    onChange={e => setDailyDate(e.target.value)}
+                    className={inputCls}
+                  />
+                </Field>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 bg-bg-farm p-3 rounded-xl border border-border-farm">
+              <div>
+                <Field label="Mortality (Dead)">
+                  <input
+                    type="number"
+                    min="0"
+                    value={dailyMortality}
+                    onChange={e => setDailyMortality(e.target.value)}
+                    className="w-full bg-white border border-border-farm rounded-lg p-2 text-xs font-bold font-mono text-center text-red-600 focus:outline-none"
+                  />
+                </Field>
+              </div>
+
+              <div>
+                <Field label="Feed (Bags)">
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    placeholder="e.g. 0.5"
+                    value={dailyFeedBags}
+                    onChange={e => setDailyFeedBags(e.target.value)}
+                    className="w-full bg-white border border-border-farm rounded-lg p-2 text-xs font-bold font-mono text-center focus:outline-none"
+                  />
+                </Field>
+              </div>
+
+              <div>
+                <Field label="Water (Liters)">
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    placeholder="e.g. 20"
+                    value={dailyWaterL}
+                    onChange={e => setDailyWaterL(e.target.value)}
+                    className="w-full bg-white border border-border-farm rounded-lg p-2 text-xs font-bold font-mono text-center focus:outline-none"
+                  />
+                </Field>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <Field label="Brooder Temp (°C)">
+                  <input
+                    type="number"
+                    step="0.5"
+                    placeholder="e.g. 32.5"
+                    value={dailyTempC}
+                    onChange={e => setDailyTempC(e.target.value)}
+                    className={inputCls}
+                  />
+                </Field>
+              </div>
+
+              <div>
+                <Field label="Linked Vaccine / Med">
+                  <select
+                    value={dailyVaccine}
+                    onChange={e => setDailyVaccine(e.target.value)}
+                    className={selectCls}
+                  >
+                    <option value="">— None / Regular Water —</option>
+                    {vaccinesList.map(v => (
+                      <option key={v.id} value={v.name}>{v.name}</option>
+                    ))}
+                    <option value="Glucose + Vitamins">Glucose + Anti-stress Vitamins</option>
+                    <option value="Antibiotics Treatment">Antibiotics Treatment</option>
+                    <option value="Coccidiostat">Coccidiostat</option>
+                  </select>
+                </Field>
+              </div>
+            </div>
+
+            <div>
+              <Field label="Chick Behaviour & Health Notes">
+                <textarea
+                  rows={2}
+                  value={dailyNotes}
+                  onChange={e => setDailyNotes(e.target.value)}
+                  placeholder="Chicks active, huddling under heater, dropping consistency, feather development..."
+                  className={inputCls}
+                />
+              </Field>
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowDailyLogModal(false)}
+                className="flex-1 py-2.5 bg-bg-farm text-text-primary font-bold text-xs rounded-xl border border-border-farm"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={submitting}
+                className="flex-1 py-2.5 bg-primary hover:bg-dark-green text-white font-bold text-xs rounded-xl shadow-sm transition-all"
+              >
+                {submitting ? 'Saving...' : 'Save Daily Log'}
               </button>
             </div>
           </form>

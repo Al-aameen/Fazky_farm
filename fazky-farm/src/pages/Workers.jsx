@@ -256,6 +256,54 @@ export default function Workers() {
                 </span>
               </div>
 
+              {/* Worker Responsibility & Performance Summary (Item XIII) */}
+              {(() => {
+                const assignedPens = (data.pens || []).filter(p => p.worker_id === w.id);
+                const assignedPenIds = assignedPens.map(p => p.id);
+                const censusCounts = data.census_counts || [];
+                const latestDate = censusCounts.length > 0
+                  ? [...censusCounts].map(c => c.date).sort((a, b) => new Date(b) - new Date(a))[0]
+                  : null;
+                const birdCount = assignedPens.reduce((sum, pen) => {
+                  const pCounts = censusCounts.filter(c => c.pen_id === pen.id && c.date === latestDate);
+                  return sum + pCounts.reduce((s, c) => s + (Number(c.bird_count) || 0), 0);
+                }, 0);
+
+                // Active loan balance
+                const workerLoans = (data.loans || []).filter(l => l.worker_id === w.id);
+                const repayments = data.loan_repayments || [];
+                const totalLoan = workerLoans.reduce((sum, l) => sum + (Number(l.total_borrowed) || 0), 0);
+                const totalRepaid = workerLoans.reduce((sum, l) => {
+                  const reps = repayments.filter(r => r.loan_id === l.id);
+                  return sum + reps.reduce((s, r) => s + (Number(r.repayment_made) || 0), 0);
+                }, 0);
+                const activeLoanBal = Math.max(0, totalLoan - totalRepaid);
+
+                return (
+                  <div className="bg-bg-farm rounded-2xl p-3 border border-border-farm/70 space-y-2 text-xs">
+                    <div className="flex justify-between items-center text-[11px]">
+                      <span className="text-text-muted font-bold">Assigned Pens:</span>
+                      <span className="font-bold text-dark-green truncate max-w-[150px]">
+                        {assignedPens.length > 0 ? assignedPens.map(p => p.name).join(', ') : 'None'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 pt-1 border-t border-border-farm/50 text-[11px]">
+                      <div>
+                        <span className="text-[10px] text-text-muted block font-bold">Flock Headcount</span>
+                        <span className="font-mono font-bold text-dark-green">{birdCount.toLocaleString()} birds</span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[10px] text-text-muted block font-bold">Advance Balance</span>
+                        <span className={`font-mono font-bold ${activeLoanBal > 0 ? 'text-amber-700' : 'text-text-muted'}`}>
+                          ₦{activeLoanBal.toLocaleString()}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
               <div className="grid grid-cols-2 gap-4 border-t border-border-farm/50 pt-3">
                 <div className="space-y-0.5">
                   <span className="text-[9px] text-text-muted font-bold uppercase tracking-wider">Assigned Role</span>

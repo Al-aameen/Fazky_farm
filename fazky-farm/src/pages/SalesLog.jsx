@@ -21,12 +21,19 @@ import {
 } from 'lucide-react';
 
 export default function SalesLog() {
-  const { data, insertRecord, bulkInsertRecords } = useData();
+  const { data, insertRecord, bulkInsertRecords, ensureDateLoaded } = useData();
   const { role, worker } = useAuth();
   const salesImportRef = useRef(null);
   
   const [selectedDate, setSelectedDate] = useState('2026-08-05'); // Default seed date
   const [activeTab, setActiveTab] = useState('today'); // 'today', 'debtors', 'history'
+
+  // Auto-fetch historical month sales data if not cached
+  React.useEffect(() => {
+    if (selectedDate && ensureDateLoaded) {
+      ensureDateLoaded('sales_log', selectedDate);
+    }
+  }, [selectedDate, ensureDateLoaded]);
 
   // Input states for new sale
   const [showAddSale, setShowAddSale] = useState(false);

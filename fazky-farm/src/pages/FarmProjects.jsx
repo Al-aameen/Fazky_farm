@@ -499,19 +499,29 @@ export default function FarmProjects() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
                     Start Date
                   </label>
-                  <DatePicker value={projStartDate} onChange={setProjStartDate} allowFutureDates={true} />
+                  <input
+                    type="date"
+                    value={projStartDate}
+                    onChange={(e) => setProjStartDate(e.target.value)}
+                    className="w-full bg-bg-farm border border-border-farm rounded-xl px-3 py-2 text-xs font-bold focus:outline-none"
+                  />
                 </div>
 
                 <div>
                   <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
                     Target Completion
                   </label>
-                  <DatePicker value={projTargetDate} onChange={setProjTargetDate} allowFutureDates={true} />
+                  <input
+                    type="date"
+                    value={projTargetDate}
+                    onChange={(e) => setProjTargetDate(e.target.value)}
+                    className="w-full bg-bg-farm border border-border-farm rounded-xl px-3 py-2 text-xs font-bold focus:outline-none"
+                  />
                 </div>
               </div>
 
@@ -524,7 +534,7 @@ export default function FarmProjects() {
                   value={projNotes}
                   onChange={(e) => setProjNotes(e.target.value)}
                   placeholder="Contractor details, specifications, warranty period, etc."
-                  className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none"
+                  className="w-full bg-bg-farm border border-border-farm rounded-xl px-3 py-2 text-xs focus:outline-none"
                 />
               </div>
 
@@ -532,14 +542,14 @@ export default function FarmProjects() {
                 <button
                   type="button"
                   onClick={() => setShowAddProjectModal(false)}
-                  className="px-4 py-2 border border-border-farm hover:bg-bg-farm rounded-lg font-bold"
+                  className="px-4 py-2 border border-border-farm hover:bg-bg-farm rounded-xl font-bold text-xs"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="px-4 py-2 bg-primary hover:bg-dark-green text-white rounded-lg font-bold shadow-sm disabled:opacity-50"
+                  className="px-4 py-2 bg-primary hover:bg-dark-green text-white rounded-xl font-bold text-xs shadow-sm disabled:opacity-50"
                 >
                   {submitting ? 'Creating...' : 'Create Project'}
                 </button>
@@ -552,8 +562,8 @@ export default function FarmProjects() {
       {/* ─── MODAL 2: LOG EXPENSE DIRECTLY TO expenses_log ─── */}
       {showExpenseModal && selectedProject && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
-          <div className="bg-white rounded-2xl border border-border-farm shadow-2xl max-w-[420px] w-full overflow-hidden animate-scale-in">
-            <div className="bg-dark-green p-4 text-white font-serif font-bold text-base flex justify-between items-center">
+          <div className="bg-white rounded-3xl border border-border-farm shadow-2xl max-w-[420px] w-full overflow-hidden animate-scale-in">
+            <div className="bg-dark-green p-5 text-white font-serif font-bold text-base flex justify-between items-center">
               <span>Log Expense for {selectedProject.title}</span>
               <button 
                 onClick={() => setShowExpenseModal(false)}
@@ -577,7 +587,7 @@ export default function FarmProjects() {
                   value={expDesc}
                   onChange={(e) => setExpDesc(e.target.value)}
                   placeholder="e.g. Purchase of 4x 300W Solar Panels"
-                  className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none"
+                  className="w-full bg-bg-farm border border-border-farm rounded-xl px-3 py-2 text-xs focus:outline-none"
                 />
               </div>
 
@@ -593,7 +603,7 @@ export default function FarmProjects() {
                     value={expAmount}
                     onChange={(e) => setExpAmount(e.target.value)}
                     placeholder="250000"
-                    className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm font-mono font-bold focus:outline-none"
+                    className="w-full bg-bg-farm border border-border-farm rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none"
                   />
                 </div>
 
@@ -601,7 +611,13 @@ export default function FarmProjects() {
                   <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
                     Expense Date *
                   </label>
-                  <DatePicker value={expDate} onChange={setExpDate} />
+                  <input
+                    type="date"
+                    required
+                    value={expDate}
+                    onChange={(e) => setExpDate(e.target.value)}
+                    className="w-full bg-bg-farm border border-border-farm rounded-xl px-3 py-2 text-xs font-bold focus:outline-none"
+                  />
                 </div>
               </div>
 

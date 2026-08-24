@@ -211,6 +211,67 @@ CREATE TABLE IF NOT EXISTS feed_inventory_log (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 17. Grower Daily Behavior & Health Logs (Phase 2 - Item V)
+CREATE TABLE IF NOT EXISTS grower_daily_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  batch_id UUID NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
+  date DATE NOT NULL,
+  mortality INT NOT NULL DEFAULT 0,
+  feed_consumed_bags NUMERIC NOT NULL DEFAULT 0,
+  feed_consumed_kg NUMERIC NOT NULL DEFAULT 0,
+  water_consumed_liters NUMERIC NOT NULL DEFAULT 0,
+  behaviour_notes TEXT,
+  vaccination_id UUID REFERENCES vaccination_schedules(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 18. Worker Advance & Loan Requests (Phase 2 - Item XII)
+CREATE TABLE IF NOT EXISTS loan_requests (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  worker_id UUID NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+  requested_amount NUMERIC NOT NULL,
+  purpose TEXT NOT NULL,
+  duration_months INT NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+  admin_notes TEXT,
+  date_requested DATE NOT NULL DEFAULT CURRENT_DATE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 19. Detailed General Livestock Registry (Phase 2 - Item XV)
+CREATE TABLE IF NOT EXISTS general_livestock_detailed (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tag_id TEXT,
+  category TEXT NOT NULL, -- Turkeys, Goats, Sheep, Cattle, Rabbits, Ducks
+  breed TEXT,
+  count_male INT NOT NULL DEFAULT 0,
+  count_female INT NOT NULL DEFAULT 0,
+  count_young INT NOT NULL DEFAULT 0,
+  acquisition_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  acquisition_cost NUMERIC NOT NULL DEFAULT 0,
+  health_status TEXT NOT NULL DEFAULT 'Healthy',
+  location_pen TEXT,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 20. Worker Portal Granular Permissions (Phase 2 - Item XIV)
+CREATE TABLE IF NOT EXISTS worker_permissions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  module_id TEXT UNIQUE NOT NULL,
+  is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  allowed_roles TEXT[] NOT NULL DEFAULT ARRAY['admin', 'manager', 'staff'],
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Ensure date_issued column exists on loans
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'loans' AND column_name = 'date_issued') THEN
+    ALTER TABLE public.loans ADD COLUMN date_issued DATE DEFAULT CURRENT_DATE;
+  END IF;
+END $$;
+
 
 -- =========================================================================
 -- HELPER FUNCTIONS & RLS SECURITY
@@ -255,9 +316,60 @@ ALTER TABLE loan_repayments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE off_pays ENABLE ROW LEVEL SECURITY;
 ALTER TABLE feed_inventory ENABLE ROW LEVEL SECURITY;
 ALTER TABLE feed_inventory_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grower_daily_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE loan_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE general_livestock_detailed ENABLE ROW LEVEL SECURITY;
+ALTER TABLE worker_permissions ENABLE ROW LEVEL SECURITY;
 
 -- ── Grants ────────────────────────────────────────────────────────────────────
 -- Supabase docs: "Adding policies doesn't remove existing grants."
+-- This is a private farm management app — no unauthenticated (anon) access on any table.
+-- Step 1: Revoke all default grants from anon and authenticated.
+-- Step 2: Grant back only what the app needs, to authenticated only.
+-- service_role is NOT revoked here — it bypasses RLS and is only used server-side.
+REVOKE ALL ON TABLE public.workers            FROM anon, authenticated;
+REVOKE ALL ON TABLE public.pen_blocks         FROM anon, authenticated;
+REVOKE ALL ON TABLE public.pens               FROM anon, authenticated;
+REVOKE ALL ON TABLE public.census_counts      FROM anon, authenticated;
+REVOKE ALL ON TABLE public.general_census     FROM anon, authenticated;
+REVOKE ALL ON TABLE public.production_log     FROM anon, authenticated;
+REVOKE ALL ON TABLE public.sales_log          FROM anon, authenticated;
+REVOKE ALL ON TABLE public.egg_price_settings FROM anon, authenticated;
+REVOKE ALL ON TABLE public.expenses_log       FROM anon, authenticated;
+REVOKE ALL ON TABLE public.maize_records      FROM anon, authenticated;
+REVOKE ALL ON TABLE public.feed_production    FROM anon, authenticated;
+REVOKE ALL ON TABLE public.loans              FROM anon, authenticated;
+REVOKE ALL ON TABLE public.loan_repayments    FROM anon, authenticated;
+REVOKE ALL ON TABLE public.off_pays           FROM anon, authenticated;
+REVOKE ALL ON TABLE public.feed_inventory     FROM anon, authenticated;
+REVOKE ALL ON TABLE public.feed_inventory_log FROM anon, authenticated;
+REVOKE ALL ON TABLE public.grower_daily_logs  FROM anon, authenticated;
+REVOKE ALL ON TABLE public.loan_requests      FROM anon, authenticated;
+REVOKE ALL ON TABLE public.general_livestock_detailed FROM anon, authenticated;
+REVOKE ALL ON TABLE public.worker_permissions FROM anon, authenticated;
+
+-- Grant exactly what authenticated users need
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.workers            TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.pen_blocks         TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.pens               TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.census_counts      TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.general_census     TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.production_log     TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sales_log          TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.egg_price_settings TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.expenses_log       TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.maize_records      TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.feed_production    TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.loans              TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.loan_repayments    TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.off_pays           TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.feed_inventory     TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.feed_inventory_log TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.grower_daily_logs  TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.loan_requests      TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.general_livestock_detailed TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_permissions TO authenticated;
+
 -- This is a private farm management app — no unauthenticated (anon) access on any table.
 -- Step 1: Revoke all default grants from anon and authenticated.
 -- Step 2: Grant back only what the app needs, to authenticated only.
@@ -306,16 +418,54 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.feed_inventory_log TO authe
 -- Workers policies
 DROP POLICY IF EXISTS workers_select ON workers;
 DROP POLICY IF EXISTS workers_all_admin ON workers;
+DROP POLICY IF EXISTS workers_update_self ON workers;
+
 CREATE POLICY workers_select ON workers
 FOR SELECT TO authenticated
 USING (
-  (SELECT auth.uid()) = auth_user_id OR my_role() IN ('admin', 'manager')
+  (SELECT auth.uid()) = auth_user_id 
+  OR lower(email) = lower((SELECT auth.jwt() ->> 'email'))
+  OR my_role() IN ('admin', 'manager')
 );
+
+CREATE POLICY workers_update_self ON workers
+FOR UPDATE TO authenticated
+USING (
+  (SELECT auth.uid()) = auth_user_id 
+  OR (auth_user_id IS NULL AND lower(email) = lower((SELECT auth.jwt() ->> 'email')))
+);
+
 CREATE POLICY workers_all_admin ON workers
 FOR ALL TO authenticated
 USING (
   my_role() = 'admin'
 );
+
+-- Auto-link auth_user_id on public.workers whenever a user registers or is created in auth.users
+CREATE OR REPLACE FUNCTION public.handle_auth_user_created()
+RETURNS TRIGGER AS $$
+BEGIN
+  UPDATE public.workers
+  SET auth_user_id = NEW.id,
+      status = 'active'
+  WHERE lower(email) = lower(NEW.email);
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = '';
+
+DROP TRIGGER IF EXISTS trg_on_auth_user_created ON auth.users;
+CREATE TRIGGER trg_on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_auth_user_created();
+
+-- One-time sync for any existing unlinked accounts
+UPDATE public.workers w
+SET auth_user_id = u.id,
+    status = 'active'
+FROM auth.users u
+WHERE lower(w.email) = lower(u.email)
+  AND (w.auth_user_id IS NULL OR w.auth_user_id != u.id);
+
 
 -- Pen Blocks policies
 -- auth.role() = 'authenticated' replaced with TO authenticated (docs anti-pattern fix)
@@ -449,18 +599,17 @@ USING (
   my_role() = 'admin'
 );
 
--- Feed Inventory policies
+-- Feed Inventory policies (Staff can SELECT/read, Admin/Manager can write)
 DROP POLICY IF EXISTS feed_inventory_select ON feed_inventory;
 DROP POLICY IF EXISTS feed_inventory_all_admin ON feed_inventory;
 CREATE POLICY feed_inventory_select ON feed_inventory
 FOR SELECT TO authenticated
-USING (
-  my_role() IN ('admin', 'manager')
-);
+USING (true);
+
 CREATE POLICY feed_inventory_all_admin ON feed_inventory
 FOR ALL TO authenticated
 USING (
-  my_role() = 'admin'
+  my_role() IN ('admin', 'manager')
 );
 
 -- Feed Inventory Log policies
@@ -474,8 +623,70 @@ USING (
 CREATE POLICY feed_inventory_log_all_admin ON feed_inventory_log
 FOR ALL TO authenticated
 USING (
+  my_role() IN ('admin', 'manager')
+);
+
+-- Grower Daily Logs policies
+DROP POLICY IF EXISTS grower_daily_logs_select ON grower_daily_logs;
+DROP POLICY IF EXISTS grower_daily_logs_all ON grower_daily_logs;
+CREATE POLICY grower_daily_logs_select ON grower_daily_logs
+FOR SELECT TO authenticated
+USING (true);
+
+CREATE POLICY grower_daily_logs_all ON grower_daily_logs
+FOR ALL TO authenticated
+USING (
+  my_role() IN ('admin', 'manager', 'staff')
+);
+
+-- Loan Requests policies (Workers can select/insert their own, Admin can manage all)
+DROP POLICY IF EXISTS loan_requests_select ON loan_requests;
+DROP POLICY IF EXISTS loan_requests_insert ON loan_requests;
+DROP POLICY IF EXISTS loan_requests_admin ON loan_requests;
+CREATE POLICY loan_requests_select ON loan_requests
+FOR SELECT TO authenticated
+USING (
+  my_role() = 'admin' OR worker_id = my_worker_id()
+);
+
+CREATE POLICY loan_requests_insert ON loan_requests
+FOR INSERT TO authenticated
+WITH CHECK (
+  worker_id = my_worker_id() OR my_role() = 'admin'
+);
+
+CREATE POLICY loan_requests_admin ON loan_requests
+FOR ALL TO authenticated
+USING (
   my_role() = 'admin'
 );
+
+-- General Livestock Detailed policies
+DROP POLICY IF EXISTS general_livestock_detailed_select ON general_livestock_detailed;
+DROP POLICY IF EXISTS general_livestock_detailed_all ON general_livestock_detailed;
+CREATE POLICY general_livestock_detailed_select ON general_livestock_detailed
+FOR SELECT TO authenticated
+USING (true);
+
+CREATE POLICY general_livestock_detailed_all ON general_livestock_detailed
+FOR ALL TO authenticated
+USING (
+  my_role() IN ('admin', 'manager')
+);
+
+-- Worker Permissions policies
+DROP POLICY IF EXISTS worker_permissions_select ON worker_permissions;
+DROP POLICY IF EXISTS worker_permissions_admin ON worker_permissions;
+CREATE POLICY worker_permissions_select ON worker_permissions
+FOR SELECT TO authenticated
+USING (true);
+
+CREATE POLICY worker_permissions_admin ON worker_permissions
+FOR ALL TO authenticated
+USING (
+  my_role() = 'admin'
+);
+
 
 -- =========================================================================
 -- DATABASE TRIGGERS

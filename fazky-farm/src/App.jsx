@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { DataProvider } from './hooks/useData';
+import { DataProvider, useData } from './hooks/useData';
 import MainLayout from './pages/MainLayout';
 import LoginPage from './pages/LoginPage';
 import ProtectedRoute from './components/ProtectedRoute';
 
 // Pages import
 import Dashboard from './pages/Dashboard';
+import WorkerDashboard from './pages/WorkerDashboard';
 import CensusMatrix from './pages/CensusMatrix';
 import ProductionLog from './pages/ProductionLog';
 import SalesLog from './pages/SalesLog';
@@ -21,11 +22,13 @@ import FlockHealth from './pages/FlockHealth';
 import FlockLifecycle from './pages/FlockLifecycle';
 import CustomerOrders from './pages/CustomerOrders';
 import FarmProjects from './pages/FarmProjects';
+import GeneralLivestock from './pages/GeneralLivestock';
 
 function AppContent() {
   const { user, role, loading } = useAuth();
+  const { loadPageData } = useData();
   
-  // Persist active page in localStorage so page refresh never kicks user back to dashboard
+  // Persist active page in localStorage
   const [activePage, setActivePage] = useState(() => {
     const saved = localStorage.getItem('fazky_active_page');
     return saved || 'dashboard';
@@ -36,12 +39,20 @@ function AppContent() {
     localStorage.setItem('fazky_active_page', page);
   };
 
-  // If user role is staff, ensure they don't land on admin-only page
+  // Egress optimization: fetch only tables required by the active page
+  useEffect(() => {
+    if (user && activePage) {
+      loadPageData(activePage);
+    }
+  }, [user, activePage, loadPageData]);
+
+  // If user role is staff, ensure they land on an allowed staff page
   useEffect(() => {
     if (user && role === 'staff') {
-      const staffAllowed = ['census', 'production', 'flockhealth', 'feedwatch'];
+      const staffAllowed = ['workerdashboard', 'production', 'census', 'flockhealth', 'procurement'];
       if (!staffAllowed.includes(activePage)) {
-        handleSetActivePage('census');
+        setActivePage('workerdashboard');
+        localStorage.setItem('fazky_active_page', 'workerdashboard');
       }
     }
   }, [user, role, activePage]);
@@ -63,6 +74,12 @@ function AppContent() {
 
   const renderPage = () => {
     switch (activePage) {
+      case 'workerdashboard':
+        return (
+          <ProtectedRoute allowedRoles={['admin', 'manager', 'staff']}>
+            <WorkerDashboard setActivePage={handleSetActivePage} />
+          </ProtectedRoute>
+        );
       case 'dashboard':
         return (
           <ProtectedRoute allowedRoles={['admin', 'manager']}>
@@ -100,9 +117,16 @@ function AppContent() {
           </ProtectedRoute>
         );
       case 'procurement':
+      case 'feedwatch':
+        return (
+          <ProtectedRoute allowedRoles={['admin', 'manager', 'staff']}>
+            <Procurement />
+          </ProtectedRoute>
+        );
+      case 'generallivestock':
         return (
           <ProtectedRoute allowedRoles={['admin', 'manager']}>
-            <Procurement />
+            <GeneralLivestock />
           </ProtectedRoute>
         );
       case 'loans':
@@ -133,12 +157,6 @@ function AppContent() {
         return (
           <ProtectedRoute allowedRoles={['admin', 'manager']}>
             <FlockLifecycle />
-          </ProtectedRoute>
-        );
-      case 'feedwatch':
-        return (
-          <ProtectedRoute allowedRoles={['admin', 'manager', 'staff']}>
-            <FeedWatch />
           </ProtectedRoute>
         );
       case 'customerorders':

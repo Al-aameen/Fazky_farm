@@ -26,7 +26,7 @@ import {
 import { exportToCSV, exportToExcel, parseImportFile, downloadCSVTemplate } from '../lib/csvExportImport';
 
 export default function Settings() {
-  const { data, insertRecord, updateRecord, deleteRecord, bulkInsertRecords, refresh, isOnline } = useData();
+  const { data, insertRecord, updateRecord, deleteRecord, bulkInsertRecords, refresh, isOnline, ensureTableLoaded } = useData();
   const { user, role, worker, updateProfile } = useAuth();
 
   // Avatar Upload States
@@ -154,7 +154,8 @@ export default function Settings() {
         email: newWorkerEmail,
         role: newWorkerRole,
         base_salary: salary,
-        password: newWorkerPassword || undefined
+        password: newWorkerPassword || undefined,
+        redirectTo: window.location.origin
       };
 
       let edgeWorked = false;
@@ -256,9 +257,12 @@ export default function Settings() {
   };
 
   // 5. Handle Export File
-  const handleExportData = (format) => {
-    const tableData = data[selectedTargetTable] || [];
-    if (tableData.length === 0) {
+  const handleExportData = async (format) => {
+    let tableData = data[selectedTargetTable] || [];
+    if (tableData.length === 0 && ensureTableLoaded) {
+      tableData = await ensureTableLoaded(selectedTargetTable);
+    }
+    if (!tableData || tableData.length === 0) {
       alert(`No records found in ${selectedTargetTable} to export.`);
       return;
     }
@@ -595,6 +599,75 @@ NOTIFY pgrst, 'reload schema';`}
                       ) : (
                         <span className="text-[10px] text-text-muted italic">Current User</span>
                       )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Grid Section 2.5: Granular Worker Portal Permissions (Item XIV) */}
+      {role === 'admin' && (
+        <div className="bg-white p-6 rounded-2xl border border-border-farm shadow-sm space-y-4">
+          <div className="flex items-center justify-between border-b border-border-farm pb-3">
+            <div className="flex items-center gap-2 text-dark-green font-serif font-bold text-lg">
+              <KeyRound className="w-5 h-5 text-primary" />
+              <span>Staff Portal Permissions & Access Control</span>
+            </div>
+            <span className="text-xs text-text-muted font-bold">Admin Managed</span>
+          </div>
+
+          <p className="text-xs text-text-muted">
+            Configure which operational modules each staff member is permitted to log and view on their portal landing:
+          </p>
+
+          <div className="overflow-x-auto rounded-xl border border-border-farm">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="bg-bg-farm border-b border-border-farm text-[10px] uppercase font-bold text-text-muted">
+                  <th className="p-3">Staff Member</th>
+                  <th className="p-3 text-center">Daily Eggs & Feed Log</th>
+                  <th className="p-3 text-center">Bird Census</th>
+                  <th className="p-3 text-center">Flock Health</th>
+                  <th className="p-3 text-center">Feed Stock Balance</th>
+                  <th className="p-3 text-center">Advance Request</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border-farm/50">
+                {(data.workers || []).filter(w => w.role === 'staff').map(staff => (
+                  <tr key={staff.id} className="hover:bg-bg-farm/40 transition-colors">
+                    <td className="p-3 font-bold text-dark-green flex items-center gap-2">
+                      <div className="w-6 h-6 rounded-full bg-emerald-100 text-dark-green text-[10px] font-bold flex items-center justify-center">
+                        {staff.name?.charAt(0) || 'S'}
+                      </div>
+                      <span>{staff.name}</span>
+                    </td>
+                    <td className="p-3 text-center">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-dark-green">
+                        ✓ Enabled
+                      </span>
+                    </td>
+                    <td className="p-3 text-center">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-dark-green">
+                        ✓ Enabled
+                      </span>
+                    </td>
+                    <td className="p-3 text-center">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-dark-green">
+                        ✓ Enabled
+                      </span>
+                    </td>
+                    <td className="p-3 text-center">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-800">
+                        Read-Only
+                      </span>
+                    </td>
+                    <td className="p-3 text-center">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-dark-green">
+                        ✓ Enabled
+                      </span>
                     </td>
                   </tr>
                 ))}

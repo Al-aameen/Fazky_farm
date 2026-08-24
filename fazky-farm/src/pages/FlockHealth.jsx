@@ -27,12 +27,20 @@ const DEFAULT_SCHEDULES = [
 ];
 
 export default function FlockHealth() {
-  const { data, insertRecord, updateRecord, deleteRecord, bulkInsertRecords } = useData();
+  const { data, insertRecord, updateRecord, deleteRecord, bulkInsertRecords, ensureDateLoaded } = useData();
   const { role, worker } = useAuth();
   const importRef = useRef(null);
 
   const [selectedDate, setSelectedDate] = useState('2026-08-05');
   
+  // Auto-fetch historical month data on date selection if not cached
+  useEffect(() => {
+    if (selectedDate && ensureDateLoaded) {
+      ensureDateLoaded('production_log', selectedDate);
+      ensureDateLoaded('census_counts', selectedDate);
+    }
+  }, [selectedDate, ensureDateLoaded]);
+
   // Modal States
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingVac, setEditingVac] = useState(null);
@@ -433,26 +441,28 @@ export default function FlockHealth() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
                     Scheduled Date *
                   </label>
-                  <DatePicker
+                  <input
+                    type="date"
+                    required
                     value={vacDate}
-                    onChange={setVacDate}
-                    allowFutureDates={true}
+                    onChange={(e) => setVacDate(e.target.value)}
+                    className="w-full bg-bg-farm border border-border-farm rounded-xl px-3.5 py-2.5 text-xs font-bold focus:ring-2 focus:ring-accent focus:outline-none"
                   />
                 </div>
 
                 <div>
                   <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
-                    Status
+                    Status *
                   </label>
                   <select
                     value={vacStatus}
                     onChange={(e) => setVacStatus(e.target.value)}
-                    className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm font-bold text-text-primary focus:outline-none"
+                    className="w-full bg-bg-farm border border-border-farm rounded-xl px-3.5 py-2.5 text-xs font-bold text-text-primary focus:ring-2 focus:ring-accent focus:outline-none"
                   >
                     <option value="Upcoming">Upcoming</option>
                     <option value="Completed">Completed</option>
@@ -461,17 +471,55 @@ export default function FlockHealth() {
                 </div>
               </div>
 
+              {/* Dynamic Target Pen / Batch Dropdown (Item IV) */}
               <div>
                 <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
-                  Target Pen / Batch
+                  Target Pen / Batch *
                 </label>
-                <input
-                  type="text"
+                <select
                   value={targetPen}
                   onChange={(e) => setTargetPen(e.target.value)}
-                  placeholder="e.g. All Pens, Pen Block A, Batch 2"
-                  className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none"
-                />
+                  className="w-full bg-bg-farm border border-border-farm rounded-xl px-3.5 py-2.5 text-xs font-bold text-dark-green focus:ring-2 focus:ring-accent focus:outline-none"
+                >
+                  <optgroup label="General Targets">
+                    <option value="All Pens & Batches">All Pens & Batches</option>
+                    <option value="All Laying Pens">All Laying Pens</option>
+                    <option value="All Brooder / Chick Pens">All Brooder / Chick Pens</option>
+                  </optgroup>
+
+                  {/* Active Batches (Day-Old Chicks & Growers) */}
+                  {(data.batches || []).length > 0 && (
+                    <optgroup label="Active Chick & Grower Batches">
+                      {(data.batches || []).map(b => (
+                        <option key={b.id} value={`Batch: ${b.name || b.batch_number}`}>
+                          {b.name || `Batch #${b.batch_number}`} ({b.stage || 'Chicks'} • {b.initial_count || 0} birds)
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+
+                  {/* Active Pens */}
+                  {(data.pens || []).length > 0 && (
+                    <optgroup label="Laying Pens">
+                      {(data.pens || []).map(p => (
+                        <option key={p.id} value={`Pen ${p.name}`}>
+                          Pen {p.name} {p.generation ? `(${p.generation})` : ''}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+
+                  {/* Blocks */}
+                  {(data.pen_blocks || []).length > 0 && (
+                    <optgroup label="Pen Blocks">
+                      {(data.pen_blocks || []).map(blk => (
+                        <option key={blk.id} value={`Block: ${blk.name}`}>
+                          {blk.name} (All Pens in Block)
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
               </div>
 
               <div>
@@ -482,8 +530,8 @@ export default function FlockHealth() {
                   rows={3}
                   value={vacNotes}
                   onChange={(e) => setVacNotes(e.target.value)}
-                  placeholder="Dosage instructions, water restriction before administration, etc."
-                  className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none"
+                  placeholder="Dosage instructions, water restriction before administration, administration method (drinking water, wing-web, eye-drop)..."
+                  className="w-full bg-bg-farm border border-border-farm rounded-xl p-3 text-xs focus:ring-2 focus:ring-accent focus:outline-none"
                 />
               </div>
 

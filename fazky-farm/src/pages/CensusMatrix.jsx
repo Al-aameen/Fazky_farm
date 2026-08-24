@@ -6,15 +6,23 @@ import { exportToExcel, parseImportFile } from '../lib/csvExportImport';
 import { Plus, Save, Edit3, Settings, ShieldAlert, Check, Download, Search, Upload } from 'lucide-react';
 
 export default function CensusMatrix() {
-  const { data, insertRecord, updateRecord, isOnline, bulkInsertRecords } = useData();
+  const { data, insertRecord, updateRecord, isOnline, bulkInsertRecords, ensureDateLoaded } = useData();
   const { role, worker } = useAuth();
 
-  const [selectedDate, setSelectedDate] = useState('2026-08-05'); // Seed starting date
+  const currentMonthStr = new Date().toISOString().split('T')[0].slice(0, 7);
+  const [selectedMonth, setSelectedMonth] = useState(currentMonthStr); // e.g. '2026-08'
   const [gridData, setGridData] = useState({}); // Stores cell values: { 'penId-side-slot': count }
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const censusImportRef = useRef(null);
+
+  // Auto-fetch historical census counts for the selected month if not cached
+  useEffect(() => {
+    if (selectedMonth && ensureDateLoaded) {
+      ensureDateLoaded('census_counts', `${selectedMonth}-01`);
+    }
+  }, [selectedMonth, ensureDateLoaded]);
 
   // Modal states for Add Pen
   const [showAddPen, setShowAddPen] = useState(false);
@@ -90,13 +98,13 @@ export default function CensusMatrix() {
 
   const maxSlots = visiblePens.length > 0 ? Math.max(...visiblePens.map(p => p.slot_count || 15)) : 15;
 
-  // Initialize local grid cells state when selectedDate or census changes
+  // Initialize local grid cells state when selectedMonth or census changes
   useEffect(() => {
     const counts = data.census_counts || [];
     const newGrid = {};
 
     counts.forEach(c => {
-      if (c.date === selectedDate) {
+      if (c.date && c.date.startsWith(selectedMonth)) {
         const key = `${c.pen_id}-${c.side}-${c.slot_number}`;
         newGrid[key] = c.bird_count;
       }
@@ -107,14 +115,13 @@ export default function CensusMatrix() {
       for (let slot = 1; slot <= col.pen.slot_count; slot++) {
         const key = `${col.pen.id}-${col.side}-${slot}`;
         if (newGrid[key] === undefined) {
-          // If no count, search for previous values or default to seed defaults (let's default to 0 if not found)
           newGrid[key] = '';
         }
       }
     });
 
     setGridData(newGrid);
-  }, [selectedDate, data.census_counts, data.pens]);
+  }, [selectedMonth, data.census_counts, data.pens]);
 
   const handleCellChange = (penId, side, slot, val) => {
     const key = `${penId}-${side}-${slot}`;
@@ -158,8 +165,10 @@ export default function CensusMatrix() {
             c.pen_id === col.pen.id &&
             c.side === col.side &&
             c.slot_number === slot &&
-            c.date === selectedDate
+            c.date && c.date.startsWith(selectedMonth)
           );
+
+          const targetDate = `${selectedMonth}-01`;
 
           if (existing) {
             // Update if value changed
@@ -177,7 +186,7 @@ export default function CensusMatrix() {
               side: col.side,
               slot_number: slot,
               bird_count: currentCount,
-              date: selectedDate
+              date: targetDate
             });
           }
         }
@@ -259,25 +268,26 @@ export default function CensusMatrix() {
         <div className="flex items-center gap-3">
           <span className="text-2xl">📊</span>
           <div>
-            <h3 className="font-serif text-dark-green font-bold text-lg leading-snug">Laying Poultry Census</h3>
+            <h3 className="font-serif text-dark-green font-bold text-lg leading-snug">Monthly Bird Census</h3>
             <p className="text-[10px] text-text-muted font-sans font-medium uppercase tracking-wider mt-0.5">
-              Daily cage slot ledger rows
+              Monthly cage slot count matrix (daily mortalities recorded in Production Log)
             </p>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-          {/* Formatted DatePicker */}
+          {/* Formatted Monthly DatePicker */}
           <DatePicker
-            label="Census Date"
-            value={selectedDate}
-            onChange={setSelectedDate}
+            label="Census Month"
+            mode="month"
+            value={selectedMonth}
+            onChange={setSelectedMonth}
           />
 
           {/* Export Action Button */}
           <button
             type="button"
-            onClick={() => exportToExcel(`fazky_bird_census_${selectedDate}`, 'Census', data.census_counts || [])}
+            onClick={() => exportToExcel(`fazky_bird_census_${selectedMonth}`, 'Census', data.census_counts || [])}
             className="flex items-center gap-1.5 bg-white hover:bg-emerald-50 text-dark-green font-bold px-3 py-1.5 rounded-lg text-xs border border-border-farm shadow-sm transition-all"
             title="Export as Excel (.xlsx) or CSV"
           >

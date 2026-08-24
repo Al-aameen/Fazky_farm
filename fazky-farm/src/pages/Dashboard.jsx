@@ -17,7 +17,7 @@ import {
 
 
 export default function Dashboard() {
-  const { data } = useData();
+  const { data, ensureDateLoaded } = useData();
   const { role } = useAuth();
   
   // Date state - defaults to the latest date available in logs, or today if empty
@@ -36,6 +36,16 @@ export default function Dashboard() {
   };
 
   const [selectedDate, setSelectedDate] = useState(getLatestLogDate());
+
+  // On-demand historical data loading: fetch requested month if not cached
+  useEffect(() => {
+    if (selectedDate && ensureDateLoaded) {
+      ensureDateLoaded('production_log', selectedDate);
+      ensureDateLoaded('sales_log', selectedDate);
+      ensureDateLoaded('expenses_log', selectedDate);
+      ensureDateLoaded('census_counts', selectedDate);
+    }
+  }, [selectedDate, ensureDateLoaded]);
 
   const getYesterdayDate = (dateStr) => {
     const d = new Date(dateStr);
@@ -221,14 +231,14 @@ export default function Dashboard() {
       const morningEggs = Number(log?.morning_eggs) || 0;
       const eveningEggs = Number(log?.evening_eggs) || 0;
       const totalEggs   = morningEggs + eveningEggs;
-      const morningFeed = Number(log?.morning_feed) || 0;
-      const eveningFeed = Number(log?.evening_feed) || 0;
-      const totalFeedKg = morningFeed + eveningFeed;
-      const mortality   = Number(log?.mortality) || 0;
+      const morningFeed  = Number(log?.morning_feed) || 0;
+      const eveningFeed  = Number(log?.evening_feed) || 0;
+      const totalFeedBags = morningFeed + eveningFeed;   // stored & displayed in bags (1 bag = 25 kg)
+      const mortality    = Number(log?.mortality) || 0;
 
-      // P&L calculation
-      const revenue  = (totalEggs / 30) * pricePerCrate;              // eggs → crates × price
-      const feedCost = (totalFeedKg / 25) * feedCostPerBag;           // kg → bags × cost
+      // P&L calculation — feed already stored in bags, so no ÷25 needed
+      const revenue  = (totalEggs / 30) * pricePerCrate;  // eggs → crates × price
+      const feedCost = totalFeedBags * feedCostPerBag;     // bags × ₦/bag
       const netPnl   = revenue - feedCost;
       const hasData  = log != null;
 
@@ -239,7 +249,7 @@ export default function Dashboard() {
         workerName: worker ? worker.name : 'Unassigned',
         birdCount: totalBirds,
         totalEggs,
-        totalFeedKg,
+        totalFeedBags,
         mortality,
         revenue,
         feedCost,
@@ -563,7 +573,7 @@ export default function Dashboard() {
                     </div>
                     <div className="flex justify-between">
                       <span className="text-text-muted">🌽 Feed</span>
-                      <span className="font-bold text-text-primary">{flock.totalFeedKg.toFixed(1)} kg</span>
+                      <span className="font-bold text-text-primary">{flock.totalFeedBags.toFixed(1)} bags</span>
                     </div>
                     {flock.mortality > 0 && (
                       <div className="flex justify-between">

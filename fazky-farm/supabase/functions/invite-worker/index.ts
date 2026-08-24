@@ -83,7 +83,8 @@ serve(async (req) => {
     } else {
       // Option B: Invite worker via email magic invite
       const { data: inviteData, error: inviteError } = await supabaseClient.auth.admin.inviteUserByEmail(email, {
-        data: { name, role }
+        data: { name, role },
+        redirectTo: payload.redirectTo || undefined
       })
       if (inviteError) {
         throw inviteError

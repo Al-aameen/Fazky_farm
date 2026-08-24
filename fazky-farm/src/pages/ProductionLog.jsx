@@ -6,7 +6,7 @@ import { exportToExcel, parseImportFile } from '../lib/csvExportImport';
 import { Save, Check, ShieldAlert, Download, Search, Upload } from 'lucide-react';
 
 export default function ProductionLog() {
-  const { data, insertRecord, updateRecord, bulkInsertRecords } = useData();
+  const { data, insertRecord, updateRecord, bulkInsertRecords, ensureDateLoaded } = useData();
   const { role, worker } = useAuth();
   
   const [selectedDate, setSelectedDate] = useState('2026-08-05'); // Default seed date
@@ -15,6 +15,13 @@ export default function ProductionLog() {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const importRef = useRef(null);
+
+  // Auto-fetch historical month data on date selection if not cached
+  useEffect(() => {
+    if (selectedDate && ensureDateLoaded) {
+      ensureDateLoaded('production_log', selectedDate);
+    }
+  }, [selectedDate, ensureDateLoaded]);
 
   // Filter pens by role
   const getVisiblePens = () => {
