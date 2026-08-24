@@ -318,6 +318,10 @@ export default function FlockLifecycle() {
 
   const canEdit = role === 'admin' || role === 'manager';
 
+  const totalBirdsGrowing = growingBatches.reduce((s, b) => s + (Number(b.initial_quantity) || 0), 0);
+  const totalSold = flockSales.reduce((s, x) => s + (Number(x.quantity_sold) || 0), 0);
+  const totalRevenue = flockSales.reduce((s, x) => s + (Number(x.total_revenue) || 0), 0);
+
   const kpis = [
     { label: 'Batches',        value: batches.length,         icon: ClipboardList, color: 'bg-blue-50 text-blue-600'   },
     { label: 'Birds Growing',  value: fmt(totalBirdsGrowing), icon: Bird,          color: 'bg-amber-50 text-amber-600' },

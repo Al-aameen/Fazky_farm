@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useData } from '../hooks/useData';
 import { useAuth } from '../context/AuthContext';
 import WeatherWidget from '../components/WeatherWidget';
