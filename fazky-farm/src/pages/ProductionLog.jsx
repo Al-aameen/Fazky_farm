@@ -2,8 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useData } from '../hooks/useData';
 import { useAuth } from '../context/AuthContext';
 import DatePicker from '../components/DatePicker';
+import LedgerDigitizerModal from '../components/LedgerDigitizerModal';
 import { exportToExcel, parseImportFile } from '../lib/csvExportImport';
-import { Save, Check, ShieldAlert, Download, Search, Upload } from 'lucide-react';
+import { Save, Check, ShieldAlert, Download, Search, Upload, Sparkles } from 'lucide-react';
 
 export default function ProductionLog() {
   const { data, insertRecord, updateRecord, bulkInsertRecords, ensureDateLoaded } = useData();
@@ -14,6 +15,7 @@ export default function ProductionLog() {
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [showAiDigitizer, setShowAiDigitizer] = useState(false);
   const importRef = useRef(null);
 
   // Auto-fetch historical month data on date selection if not cached
@@ -225,6 +227,17 @@ export default function ProductionLog() {
             value={selectedDate}
             onChange={setSelectedDate}
           />
+
+          {/* AI Ledger Digitizer Button */}
+          <button
+            type="button"
+            onClick={() => setShowAiDigitizer(true)}
+            className="flex items-center gap-1.5 bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-600 hover:to-teal-600 text-white font-bold px-3.5 py-1.5 rounded-lg text-xs shadow-md transition-all border border-emerald-600/40"
+            title="Scan physical handwritten notebook page using Claude 3.5 Sonnet Vision & Human-in-the-Loop review"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-accent animate-pulse" />
+            <span>Scan Ledger (AI)</span>
+          </button>
 
           {/* Import CSV/Excel Button */}
           <input
@@ -570,6 +583,20 @@ export default function ProductionLog() {
           </div>
         </details>
       </div>
+
+      {/* AI Ledger Digitizer Modal */}
+      <LedgerDigitizerModal
+        isOpen={showAiDigitizer}
+        onClose={() => setShowAiDigitizer(false)}
+        onCommitSuccess={(committedDate) => {
+          setSelectedDate(committedDate);
+          if (ensureDateLoaded) ensureDateLoaded('production_log', committedDate);
+        }}
+        data={data}
+        insertRecord={insertRecord}
+        updateRecord={updateRecord}
+        bulkInsertRecords={bulkInsertRecords}
+      />
     </div>
   );
 }
