@@ -258,14 +258,43 @@ export default function Workers() {
 
               {/* Worker Responsibility & Performance Summary (Item XIII) */}
               {(() => {
-                const assignedPens = (data.pens || []).filter(p => p.worker_id === w.id);
-                const assignedPenIds = assignedPens.map(p => p.id);
+                const todayStr = new Date().toISOString().split('T')[0];
+                const rawAssignments = data.pen_worker_history || [];
+                const nameHistory = data.pen_name_history || [];
+                const allPens = data.pens || [];
+                const penLookup = Object.fromEntries(allPens.map(p => [p.id, p]));
+
+                // Active assignments today
+                const activeAssignments = rawAssignments.filter(a => 
+                  a.worker_id === w.id && 
+                  a.start_date <= todayStr && 
+                  (!a.end_date || a.end_date >= todayStr)
+                );
+
+                const assignedPenNames = activeAssignments.map(a => {
+                  const pen = penLookup[a.pen_id];
+                  const pnh = nameHistory.find(n => 
+                    n.pen_id === a.pen_id && 
+                    n.start_date <= todayStr && 
+                    (!n.end_date || n.end_date >= todayStr) &&
+                    n.is_primary !== false
+                  );
+                  return pnh?.display_name || pen?.name || 'Pen';
+                });
+
+                // Fallback to direct pen.worker_id if no history
+                if (assignedPenNames.length === 0) {
+                  const directPens = allPens.filter(p => p.worker_id === w.id && !p.name?.toLowerCase().includes('retired'));
+                  directPens.forEach(p => assignedPenNames.push(p.name));
+                }
+
+                const assignedPenIds = activeAssignments.map(a => a.pen_id);
                 const censusCounts = data.census_counts || [];
                 const latestDate = censusCounts.length > 0
                   ? [...censusCounts].map(c => c.date).sort((a, b) => new Date(b) - new Date(a))[0]
                   : null;
-                const birdCount = assignedPens.reduce((sum, pen) => {
-                  const pCounts = censusCounts.filter(c => c.pen_id === pen.id && c.date === latestDate);
+                const birdCount = assignedPenIds.reduce((sum, penId) => {
+                  const pCounts = censusCounts.filter(c => c.pen_id === penId && c.date === latestDate);
                   return sum + pCounts.reduce((s, c) => s + (Number(c.bird_count) || 0), 0);
                 }, 0);
 
@@ -284,7 +313,7 @@ export default function Workers() {
                     <div className="flex justify-between items-center text-[11px]">
                       <span className="text-text-muted font-bold">Assigned Pens:</span>
                       <span className="font-bold text-dark-green truncate max-w-[150px]">
-                        {assignedPens.length > 0 ? assignedPens.map(p => p.name).join(', ') : 'None'}
+                        {assignedPenNames.length > 0 ? assignedPenNames.join(', ') : (w.status === 'inactive' ? 'Departed' : 'Assisting / Unassigned')}
                       </span>
                     </div>
 

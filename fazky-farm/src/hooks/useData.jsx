@@ -9,6 +9,9 @@ export const TABLE_NAMES = [
   'workers',
   'pen_blocks',
   'pens',
+  'pen_name_history',
+  'pen_worker_history',
+  'worker_name_aliases',
   'census_counts',
   'general_census',
   'production_log',
@@ -39,6 +42,9 @@ export const GLOBAL_TABLES = [
   'workers',
   'pen_blocks',
   'pens',
+  'pen_name_history',
+  'pen_worker_history',
+  'worker_name_aliases',
   'egg_price_settings',
   'farm_projects',
   'vaccination_schedules',
@@ -48,10 +54,10 @@ export const GLOBAL_TABLES = [
 
 // Tier 2: Page-specific mapping — only fetch what the active page needs
 export const PAGE_TABLES_MAP = {
-  dashboard:        ['production_log', 'sales_log', 'expenses_log', 'census_counts', 'general_census'],
-  workerdashboard:  ['production_log', 'census_counts', 'vaccination_schedules', 'loan_requests', 'feed_inventory'],
-  census:           ['census_counts', 'general_census'],
-  production:       ['production_log'],
+  dashboard:        ['production_log', 'sales_log', 'expenses_log', 'census_counts', 'general_census', 'pen_worker_history', 'pen_name_history'],
+  workerdashboard:  ['production_log', 'census_counts', 'vaccination_schedules', 'loan_requests', 'feed_inventory', 'pen_worker_history'],
+  census:           ['census_counts', 'general_census', 'pen_worker_history', 'pen_name_history'],
+  production:       ['production_log', 'pen_worker_history', 'pen_name_history'],
   flockhealth:      ['production_log', 'census_counts', 'flock_health_log', 'batches'],
   flocklifecycle:   ['batches', 'grower_logs', 'grower_daily_logs', 'flock_sales', 'vaccination_schedules', 'pens'],
   feedwatch:        ['feed_inventory', 'feed_inventory_log', 'feed_production', 'maize_records'],
@@ -62,9 +68,9 @@ export const PAGE_TABLES_MAP = {
   procurement:      ['maize_records', 'feed_production', 'feed_inventory', 'feed_inventory_log', 'expenses_log'],
   loans:            ['loans', 'loan_repayments', 'loan_requests'],
   payroll:          ['loans', 'loan_repayments', 'off_pays'],
-  workers:          ['workers', 'pens'],
+  workers:          ['workers', 'pens', 'pen_worker_history', 'pen_name_history'],
   generallivestock: ['general_livestock_detailed', 'general_census'],
-  settings:         ['workers', 'egg_price_settings', 'worker_permissions']
+  settings:         ['workers', 'egg_price_settings', 'worker_permissions', 'pen_name_history', 'worker_name_aliases']
 };
 
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes cache lifetime

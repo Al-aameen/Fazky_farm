@@ -25,44 +25,100 @@ export default function ProductionLog() {
     }
   }, [selectedDate, ensureDateLoaded]);
 
-  // Filter pens by role
-  const getVisiblePens = () => {
-    const allPens = [...(data.pens || [])].sort((a, b) => a.display_order - b.display_order);
-    if (role === 'staff') {
-      return allPens.filter(pen => pen.worker_id === worker?.id);
-    }
-    return allPens;
-  };
+  // ── Date-Adaptive Worker & Pen Resolution ──────────────────────────────────
+  const getAssignmentsForDate = () => {
+    const rawAssignments = data.pen_worker_history || [];
+    const nameHistory = data.pen_name_history || [];
+    const allPens = data.pens || [];
+    const allWorkers = data.workers || [];
 
-  const visiblePens = getVisiblePens();
+    const workerLookup = Object.fromEntries(allWorkers.map(w => [w.id, w]));
+    const penLookup = Object.fromEntries(allPens.map(p => [p.id, p]));
 
-  // Workers reference for search by worker name
-  const workerMap = Object.fromEntries((data.workers || []).map(w => [w.id, w.name]));
-
-  // Group visible pens by block, filtered by search
-  const getGroupedPens = () => {
-    const blocks = data.pen_blocks || [];
-    const lc = searchTerm.toLowerCase();
-    const grouped = [];
-
-    blocks.forEach(block => {
-      const pensInBlock = visiblePens.filter(p => {
-        if (!lc) return p.pen_block_id === block.id;
-        const workerName = (workerMap[p.worker_id] || '').toLowerCase();
-        const penName = (p.name || '').toLowerCase();
-        const blockName = (block.name || '').toLowerCase();
-        return p.pen_block_id === block.id &&
-          (penName.includes(lc) || workerName.includes(lc) || blockName.includes(lc));
-      });
-      if (pensInBlock.length > 0) {
-        grouped.push({ blockId: block.id, blockName: block.name, pens: pensInBlock });
-      }
+    // Find active assignments on selectedDate
+    const dateAssignments = rawAssignments.filter(a => {
+      const matchStart = a.start_date <= selectedDate;
+      const matchEnd = !a.end_date || a.end_date >= selectedDate;
+      return matchStart && matchEnd;
     });
 
-    return grouped;
+    if (dateAssignments.length > 0) {
+      let filtered = dateAssignments;
+      if (role === 'staff' && worker?.id) {
+        filtered = filtered.filter(a => a.worker_id === worker.id);
+      }
+
+      return filtered.map(a => {
+        const pen = penLookup[a.pen_id] || { id: a.pen_id, name: 'Unknown Pen' };
+        const wrk = workerLookup[a.worker_id] || { id: a.worker_id, name: 'Unknown Worker' };
+        
+        // Find pen's primary display name on this specific date
+        const pnh = nameHistory.find(n => 
+          n.pen_id === a.pen_id && 
+          n.start_date <= selectedDate && 
+          (!n.end_date || n.end_date >= selectedDate) &&
+          n.is_primary !== false
+        );
+
+        const penDisplayName = pnh?.display_name || pen.name;
+        const entryKey = `${a.pen_id}_${a.worker_id}`;
+
+        return {
+          entryKey,
+          pen_id: a.pen_id,
+          worker_id: a.worker_id,
+          worker_name: wrk.name || 'Staff',
+          pen_name: penDisplayName,
+          pen_physical_label: pen.name,
+          notes: a.notes
+        };
+      });
+    }
+
+    // Fallback if pen_worker_history is not yet loaded: use active physical pens
+    const activePens = allPens.filter(p => p.is_active !== false && !p.name?.toLowerCase().includes('retired'));
+    const rows = [];
+    activePens.forEach(p => {
+      rows.push({
+        entryKey: p.id,
+        pen_id: p.id,
+        worker_id: p.worker_id || null,
+        worker_name: workerLookup[p.worker_id]?.name || p.name,
+        pen_name: p.name,
+        pen_physical_label: p.name
+      });
+    });
+    return rows;
   };
 
-  const groupedPens = getGroupedPens();
+  const visibleAssignments = getAssignmentsForDate();
+
+  // Group visible worker assignments by Pen House (filtered by search term)
+  const getGroupedPenHouses = () => {
+    const lc = searchTerm.toLowerCase();
+    const map = new Map();
+
+    visibleAssignments.forEach(item => {
+      const matchSearch = !lc || 
+        item.pen_name.toLowerCase().includes(lc) || 
+        item.worker_name.toLowerCase().includes(lc);
+
+      if (!matchSearch) return;
+
+      if (!map.has(item.pen_name)) {
+        map.set(item.pen_name, {
+          penName: item.pen_name,
+          penId: item.pen_id,
+          workers: []
+        });
+      }
+      map.get(item.pen_name).workers.push(item);
+    });
+
+    return Array.from(map.values());
+  };
+
+  const groupedPenHouses = getGroupedPenHouses();
 
   // Initialize production data for the selected date
   useEffect(() => {
@@ -72,8 +128,11 @@ export default function ProductionLog() {
     // 1. Pre-fill from existing records for this date
     logs.forEach(log => {
       if (log.date === selectedDate) {
-        newProd[log.pen_id] = {
+        const key = log.worker_id ? `${log.pen_id}_${log.worker_id}` : log.pen_id;
+        newProd[key] = {
           id: log.id,
+          pen_id: log.pen_id,
+          worker_id: log.worker_id,
           morning_eggs: log.morning_eggs,
           evening_eggs: log.evening_eggs,
           morning_feed: log.morning_feed,
@@ -83,23 +142,28 @@ export default function ProductionLog() {
       }
     });
 
-    // 2. Pre-fill empty slots
-    visiblePens.forEach(pen => {
-      if (!newProd[pen.id]) {
-        newProd[pen.id] = {
-          morning_eggs: '',
-          evening_eggs: '',
-          morning_feed: '',
-          evening_feed: '',
-          mortality: ''
+    // 2. Pre-fill empty slots for current assignments
+    visibleAssignments.forEach(item => {
+      if (!newProd[item.entryKey]) {
+        // Also check if there's a fallback pen-only log
+        const fallbackLog = logs.find(l => l.date === selectedDate && l.pen_id === item.pen_id && !l.worker_id);
+        newProd[item.entryKey] = {
+          id: fallbackLog?.id || null,
+          pen_id: item.pen_id,
+          worker_id: item.worker_id,
+          morning_eggs: fallbackLog?.morning_eggs ?? '',
+          evening_eggs: fallbackLog?.evening_eggs ?? '',
+          morning_feed: fallbackLog?.morning_feed ?? '',
+          evening_feed: fallbackLog?.evening_feed ?? '',
+          mortality: fallbackLog?.mortality ?? ''
         };
       }
     });
 
     setProductionData(newProd);
-  }, [selectedDate, data.production_log, data.pens]);
+  }, [selectedDate, data.production_log, data.pen_worker_history, data.pens]);
 
-  const handleCellChange = (penId, field, value) => {
+  const handleCellChange = (entryKey, field, value) => {
     // Only accept numeric inputs (integers for counts, decimals for feeds)
     const isDecimal = field.includes('feed');
     let parsed = value;
@@ -111,15 +175,15 @@ export default function ProductionLog() {
 
     setProductionData(prev => ({
       ...prev,
-      [penId]: {
-        ...prev[penId],
+      [entryKey]: {
+        ...prev[entryKey],
         [field]: parsed
       }
     }));
   };
 
-  // Subtotal calculations for a pen block
-  const getBlockSubtotals = (blockPens) => {
+  // Subtotal calculations for a pen house group
+  const getHouseSubtotals = (houseWorkers) => {
     const totals = {
       morning_eggs: 0,
       evening_eggs: 0,
@@ -130,8 +194,8 @@ export default function ProductionLog() {
       mortality: 0
     };
 
-    blockPens.forEach(pen => {
-      const p = productionData[pen.id] || {};
+    houseWorkers.forEach(item => {
+      const p = productionData[item.entryKey] || {};
       const mEggs = Number(p.morning_eggs) || 0;
       const eEggs = Number(p.evening_eggs) || 0;
       const mFeed = Number(p.morning_feed) || 0;
@@ -152,28 +216,28 @@ export default function ProductionLog() {
 
   // Grand totals calculation
   const getGrandTotals = () => {
-    return getBlockSubtotals(visiblePens);
+    return getHouseSubtotals(visibleAssignments);
   };
 
   const handleSaveAll = async () => {
     setSaving(true);
     setSaveSuccess(false);
     try {
-      const logs = data.production_log || [];
       const dayOfWeekStr = new Date(selectedDate).toLocaleDateString('en-US', { weekday: 'long' });
 
-      for (const pen of visiblePens) {
-        const item = productionData[pen.id] || {};
+      for (const item of visibleAssignments) {
+        const prod = productionData[item.entryKey] || {};
         
         // Clean values to numeric or 0
-        const morning_eggs = Number(item.morning_eggs) || 0;
-        const evening_eggs = Number(item.evening_eggs) || 0;
-        const morning_feed = Number(item.morning_feed) || 0;
-        const evening_feed = Number(item.evening_feed) || 0;
-        const mortality = Number(item.mortality) || 0;
+        const morning_eggs = Number(prod.morning_eggs) || 0;
+        const evening_eggs = Number(prod.evening_eggs) || 0;
+        const morning_feed = Number(prod.morning_feed) || 0;
+        const evening_feed = Number(prod.evening_feed) || 0;
+        const mortality = Number(prod.mortality) || 0;
 
         const payload = {
-          pen_id: pen.id,
+          pen_id: item.pen_id,
+          worker_id: item.worker_id || null,
           date: selectedDate,
           day_of_week: dayOfWeekStr,
           morning_eggs,
@@ -183,10 +247,10 @@ export default function ProductionLog() {
           mortality
         };
 
-        if (item.id) {
+        if (prod.id) {
           // Update existing log
           await updateRecord('production_log', {
-            id: item.id,
+            id: prod.id,
             ...payload
           });
         } else {
@@ -317,25 +381,25 @@ export default function ProductionLog() {
         />
         {searchTerm && (
           <span className="text-[10px] font-bold text-primary bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-            {groupedPens.reduce((n, g) => n + g.pens.length, 0)} result{groupedPens.reduce((n, g) => n + g.pens.length, 0) !== 1 ? 's' : ''}
+            {groupedPenHouses.reduce((n, g) => n + g.workers.length, 0)} worker row{groupedPenHouses.reduce((n, g) => n + g.workers.length, 0) !== 1 ? 's' : ''}
           </span>
         )}
       </div>
 
-      {visiblePens.length === 0 ? (
+      {visibleAssignments.length === 0 ? (
         <div className="bg-white border border-border-farm rounded-2xl p-12 text-center shadow-sm">
           <ShieldAlert className="w-12 h-12 text-text-muted mx-auto mb-3" />
           <h4 className="font-serif text-lg text-dark-green font-bold">No assigned pens found</h4>
           <p className="text-xs text-text-muted mt-1 font-sans">
-            Staff can only see their own assigned pens. Ask the Admin to assign pens to your profile.
+            Staff can only see their own assigned pens for this date.
           </p>
         </div>
-      ) : groupedPens.length === 0 ? (
+      ) : groupedPenHouses.length === 0 ? (
         <div className="bg-white border border-border-farm rounded-2xl p-12 text-center shadow-sm">
           <Search className="w-12 h-12 text-text-muted mx-auto mb-3" />
-          <h4 className="font-serif text-lg text-dark-green font-bold">No matching pens</h4>
+          <h4 className="font-serif text-lg text-dark-green font-bold">No matching records</h4>
           <p className="text-xs text-text-muted mt-1 font-sans">
-            No pens match "<strong>{searchTerm}</strong>". Try searching by worker name or pen block.
+            No pen assignments match "<strong>{searchTerm}</strong>".
           </p>
         </div>
       ) : (
@@ -344,32 +408,35 @@ export default function ProductionLog() {
             <table className="w-full border-collapse text-left text-xs">
               <thead>
                 <tr className="bg-dark-green text-white font-serif text-[11px] shadow-[0_1px_0_0_rgba(0,0,0,0.15)] uppercase tracking-wide">
-                  <th className="p-3 border-r border-white/10 sticky left-0 bg-dark-green w-40 z-10">Pen Name</th>
+                  <th className="p-3 border-r border-white/10 sticky left-0 bg-dark-green w-48 z-10">Pen & Worker Name</th>
                   <th className="p-3 border-r border-white/10 text-center">Morning Eggs</th>
                   <th className="p-3 border-r border-white/10 text-center">Evening Eggs</th>
                   <th className="p-3 border-r border-white/10 text-center font-bold bg-[#1e421a]/70">Total Eggs</th>
-                  <th className="p-3 border-r border-white/10 text-center">Morn Feed (kg)</th>
-                  <th className="p-3 border-r border-white/10 text-center">Eve Feed (kg)</th>
-                  <th className="p-3 border-r border-white/10 text-center font-bold bg-[#1e421a]/70">Total Feed (kg)</th>
+                  <th className="p-3 border-r border-white/10 text-center">Morn Feed (Bags)</th>
+                  <th className="p-3 border-r border-white/10 text-center">Eve Feed (Bags)</th>
+                  <th className="p-3 border-r border-white/10 text-center font-bold bg-[#1e421a]/70">Total Feed (Bags)</th>
                   <th className="p-3 text-center">Mortality</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-farm">
-                {groupedPens.map(group => {
-                  const sub = getBlockSubtotals(group.pens);
+                {groupedPenHouses.map(house => {
+                  const sub = getHouseSubtotals(house.workers);
 
                   return (
-                    <React.Fragment key={group.blockId}>
-                      {/* Section Header */}
+                    <React.Fragment key={house.penName}>
+                      {/* Pen House Section Header */}
                       <tr className="bg-light-green text-dark-green font-serif font-bold text-xs border-y border-border-farm">
-                        <td colSpan="8" className="p-2.5 pl-4 uppercase tracking-wider">
-                          {group.blockName}
+                        <td colSpan="8" className="p-2.5 pl-4 uppercase tracking-wider flex items-center justify-between">
+                          <span>🏠 {house.penName}</span>
+                          <span className="text-[10px] font-sans font-normal opacity-80">
+                            {house.workers.length} Assigned Staff
+                          </span>
                         </td>
                       </tr>
 
-                      {/* Pen Rows */}
-                      {group.pens.map(pen => {
-                        const row = productionData[pen.id] || {};
+                      {/* Worker Rows under this Pen House */}
+                      {house.workers.map(item => {
+                        const row = productionData[item.entryKey] || {};
                         const mEggs = Number(row.morning_eggs) || 0;
                         const eEggs = Number(row.evening_eggs) || 0;
                         const mFeed = Number(row.morning_feed) || 0;
@@ -378,13 +445,18 @@ export default function ProductionLog() {
                         const isMortalityPositive = (Number(row.mortality) || 0) > 0;
 
                         return (
-                          <tr key={pen.id} className="hover:bg-bg-farm/30 transition-colors">
-                            {/* Sticky Left Column */}
-                            <td className="p-3 border-r border-border-farm sticky left-0 bg-white font-bold text-text-primary shadow-[1px_0_0_0_rgba(0,0,0,0.05)] w-40">
-                              {pen.name}
+                          <tr key={item.entryKey} className="hover:bg-bg-farm/30 transition-colors">
+                            {/* Sticky Left Column: Worker Name & Pen Tag */}
+                            <td className="p-3 border-r border-border-farm sticky left-0 bg-white font-bold text-text-primary shadow-[1px_0_0_0_rgba(0,0,0,0.05)] w-48">
+                              <div className="flex items-center justify-between">
+                                <span className="text-dark-green font-bold text-xs">{item.worker_name}</span>
+                                <span className="text-[10px] font-mono font-medium text-text-muted bg-bg-farm px-1.5 py-0.5 rounded border border-border-farm">
+                                  {item.pen_name}
+                                </span>
+                              </div>
                             </td>
 
-                            {/* Morning Eggs — onFocus auto-selects for dirty-hand tap-and-type */}
+                            {/* Morning Eggs */}
                             <td className="p-0 border-r border-border-farm">
                               <input
                                 type="text"
@@ -392,7 +464,7 @@ export default function ProductionLog() {
                                 pattern="[0-9]*"
                                 value={row.morning_eggs ?? ''}
                                 onFocus={e => e.target.select()}
-                                onChange={e => handleCellChange(pen.id, 'morning_eggs', e.target.value)}
+                                onChange={e => handleCellChange(item.entryKey, 'morning_eggs', e.target.value)}
                                 style={{ minHeight: '44px' }}
                                 className="w-full text-center py-3.5 font-mono border border-border-farm/40 bg-bg-farm/60 text-text-primary placeholder:text-text-muted/40 focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none hover:bg-bg-farm transition-colors rounded-sm"
                                 placeholder="0"
@@ -407,7 +479,7 @@ export default function ProductionLog() {
                                 pattern="[0-9]*"
                                 value={row.evening_eggs ?? ''}
                                 onFocus={e => e.target.select()}
-                                onChange={e => handleCellChange(pen.id, 'evening_eggs', e.target.value)}
+                                onChange={e => handleCellChange(item.entryKey, 'evening_eggs', e.target.value)}
                                 style={{ minHeight: '44px' }}
                                 className="w-full text-center py-3.5 font-mono border border-border-farm/40 bg-bg-farm/60 text-text-primary placeholder:text-text-muted/40 focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none hover:bg-bg-farm transition-colors rounded-sm"
                                 placeholder="0"
@@ -426,7 +498,7 @@ export default function ProductionLog() {
                                 inputMode="decimal"
                                 value={row.morning_feed ?? ''}
                                 onFocus={e => e.target.select()}
-                                onChange={e => handleCellChange(pen.id, 'morning_feed', e.target.value)}
+                                onChange={e => handleCellChange(item.entryKey, 'morning_feed', e.target.value)}
                                 style={{ minHeight: '44px' }}
                                 className="w-full text-center py-3.5 font-mono border border-border-farm/40 bg-bg-farm/60 text-text-primary placeholder:text-text-muted/40 focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none hover:bg-bg-farm transition-colors rounded-sm"
                                 placeholder="0"
@@ -440,7 +512,7 @@ export default function ProductionLog() {
                                 inputMode="decimal"
                                 value={row.evening_feed ?? ''}
                                 onFocus={e => e.target.select()}
-                                onChange={e => handleCellChange(pen.id, 'evening_feed', e.target.value)}
+                                onChange={e => handleCellChange(item.entryKey, 'evening_feed', e.target.value)}
                                 style={{ minHeight: '44px' }}
                                 className="w-full text-center py-3.5 font-mono border border-border-farm/40 bg-bg-farm/60 text-text-primary placeholder:text-text-muted/40 focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none hover:bg-bg-farm transition-colors rounded-sm"
                                 placeholder="0"
@@ -461,7 +533,7 @@ export default function ProductionLog() {
                                 value={row.mortality ?? ''}
                                 onFocus={e => e.target.select()}
                                 placeholder="0"
-                                onChange={e => handleCellChange(pen.id, 'mortality', e.target.value)}
+                                onChange={e => handleCellChange(item.entryKey, 'mortality', e.target.value)}
                                 style={{ minHeight: '44px' }}
                                 className={`w-full text-center py-3.5 font-mono font-bold border border-border-farm/40 bg-bg-farm/60 placeholder:text-text-muted/40 focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none hover:bg-bg-farm transition-colors rounded-sm ${
                                   isMortalityPositive ? 'text-red-accent bg-red-50/60' : 'text-text-primary'
@@ -472,10 +544,10 @@ export default function ProductionLog() {
                         );
                       })}
 
-                      {/* Pen Block Subtotal row */}
+                      {/* Pen House Subtotal row */}
                       <tr className="bg-green-50/30 border-b border-border-farm font-bold text-text-primary italic">
                         <td className="p-2.5 sticky left-0 bg-green-50/50 border-r border-border-farm pl-4">
-                          {group.blockName} Subtotal
+                          {house.penName} Subtotal
                         </td>
                         <td className="p-2 text-center font-mono">{sub.morning_eggs.toLocaleString()}</td>
                         <td className="p-2 text-center font-mono">{sub.evening_eggs.toLocaleString()}</td>

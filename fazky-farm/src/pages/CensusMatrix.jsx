@@ -43,20 +43,62 @@ export default function CensusMatrix() {
   const [lsVendor, setLsVendor] = useState('');
   const [lsRemarks, setLsRemarks] = useState('');
 
-  // Filter columns based on user assignment
+  // ── Date-Adaptive Pen & Worker Team Resolution for Census ────────────────
+  const targetDate = `${selectedMonth}-15`;
+
   const getVisiblePens = () => {
     const allPens = [...(data.pens || [])].sort((a, b) => a.display_order - b.display_order);
-    if (role === 'staff') {
-      // Staff only sees their assigned pens
-      return allPens.filter(pen => pen.worker_id === worker?.id);
+    const nameHistory = data.pen_name_history || [];
+    const rawAssignments = data.pen_worker_history || [];
+    const allWorkers = data.workers || [];
+    const workerLookup = Object.fromEntries(allWorkers.map(w => [w.id, w]));
+
+    // Find active assignments on targetDate
+    const dateAssignments = rawAssignments.filter(a => {
+      const matchStart = a.start_date <= targetDate;
+      const matchEnd = !a.end_date || a.end_date >= targetDate;
+      return matchStart && matchEnd;
+    });
+
+    // If staff, filter by worker's assigned pens
+    let activePens = allPens;
+    if (role === 'staff' && worker?.id) {
+      const assignedPenIds = new Set(dateAssignments.filter(a => a.worker_id === worker.id).map(a => a.pen_id));
+      activePens = activePens.filter(p => assignedPenIds.has(p.id) || p.worker_id === worker.id);
+    } else {
+      // Hide retired pens if selectedMonth is on or after Aug 2026
+      if (selectedMonth >= '2026-08') {
+        activePens = activePens.filter(p => !p.name?.toLowerCase().includes('retired'));
+      }
     }
-    return allPens;
+
+    return activePens.map(p => {
+      // Resolve display name on this date
+      const pnh = nameHistory.find(n => 
+        n.pen_id === p.id && 
+        n.start_date <= targetDate && 
+        (!n.end_date || n.end_date >= targetDate) &&
+        n.is_primary !== false
+      );
+      const displayName = pnh?.display_name || p.name;
+
+      // Find workers assigned to this pen on this date
+      const penWorkerAssignments = dateAssignments.filter(a => a.pen_id === p.id);
+      const assignedWorkerNames = penWorkerAssignments.map(a => workerLookup[a.worker_id]?.name).filter(Boolean);
+      const workerTeamStr = assignedWorkerNames.length > 0 ? assignedWorkerNames.join(', ') : 'Unassigned';
+
+      return {
+        ...p,
+        resolvedName: displayName,
+        workerTeam: workerTeamStr,
+        workerList: assignedWorkerNames,
+        slot_count: p.slot_count || 15,
+        has_sides: p.has_sides !== false // default true for 2-sided cages
+      };
+    });
   };
 
   const visiblePens = getVisiblePens();
-
-  // Worker name map for search
-  const workerMap = Object.fromEntries((data.workers || []).map(w => [w.id, w.name]));
 
   // Group visible pens by pen block, filtered by search term
   const getGroupedPens = () => {
@@ -64,19 +106,34 @@ export default function CensusMatrix() {
     const lc = searchTerm.toLowerCase();
     const grouped = [];
 
-    blocks.forEach(block => {
-      const pensInBlock = visiblePens.filter(p => {
-        if (!lc) return p.pen_block_id === block.id;
-        const workerName = (workerMap[p.worker_id] || '').toLowerCase();
-        const penName = (p.name || '').toLowerCase();
-        const blockName = (block.name || '').toLowerCase();
-        return p.pen_block_id === block.id &&
-          (penName.includes(lc) || workerName.includes(lc) || blockName.includes(lc));
+    // Group active pens by block or single group
+    if (blocks.length > 0) {
+      blocks.forEach(block => {
+        const pensInBlock = visiblePens.filter(p => {
+          if (!lc) return p.pen_block_id === block.id;
+          const wName = (p.workerTeam || '').toLowerCase();
+          const pName = (p.resolvedName || p.name || '').toLowerCase();
+          const bName = (block.name || '').toLowerCase();
+          return p.pen_block_id === block.id &&
+            (pName.includes(lc) || wName.includes(lc) || bName.includes(lc));
+        });
+        if (pensInBlock.length > 0) {
+          grouped.push({ blockId: block.id, blockName: block.name, pens: pensInBlock });
+        }
       });
-      if (pensInBlock.length > 0) {
-        grouped.push({ blockId: block.id, blockName: block.name, pens: pensInBlock });
+    }
+
+    // Fallback single block if pens don't have block IDs
+    if (grouped.length === 0 && visiblePens.length > 0) {
+      const filtered = visiblePens.filter(p => {
+        if (!lc) return true;
+        return (p.resolvedName || p.name || '').toLowerCase().includes(lc) || 
+               (p.workerTeam || '').toLowerCase().includes(lc);
+      });
+      if (filtered.length > 0) {
+        grouped.push({ blockId: 'all-houses', blockName: 'Active Poultry Houses', pens: filtered });
       }
-    });
+    }
 
     return grouped;
   };
@@ -428,15 +485,13 @@ export default function CensusMatrix() {
                       <th
                         key={pen.id}
                         colSpan={pen.has_sides ? 2 : 1}
-                        className="p-2.5 text-center border-r border-white/10 font-bold tracking-tight truncate max-w-[120px]"
-                        title={`${pen.name} (${pen.generation || 'No Batch'})`}
+                        className="p-2.5 text-center border-r border-white/10 font-bold tracking-tight"
+                        title={`${pen.resolvedName || pen.name} — Workers: ${pen.workerTeam}`}
                       >
-                        <div>{pen.name}</div>
-                        {pen.generation && (
-                          <div className="text-[9px] text-accent/90 font-medium font-sans lowercase mt-0.5">
-                            {pen.generation}
-                          </div>
-                        )}
+                        <div className="font-serif text-xs text-white">{pen.resolvedName || pen.name}</div>
+                        <div className="text-[9px] text-accent font-medium font-sans mt-0.5 truncate max-w-[180px] mx-auto opacity-95">
+                          👤 {pen.workerTeam}
+                        </div>
                       </th>
                     ))
                   )}
