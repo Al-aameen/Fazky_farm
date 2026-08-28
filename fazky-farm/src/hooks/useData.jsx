@@ -55,10 +55,10 @@ export const GLOBAL_TABLES = [
 // Tier 2: Page-specific mapping — only fetch what the active page needs
 export const PAGE_TABLES_MAP = {
   dashboard:        ['production_log', 'sales_log', 'expenses_log', 'census_counts', 'general_census', 'pen_worker_history', 'pen_name_history'],
-  workerdashboard:  ['production_log', 'census_counts', 'vaccination_schedules', 'loan_requests', 'feed_inventory', 'pen_worker_history'],
+  workerdashboard:  ['production_log', 'census_counts', 'vaccination_schedules', 'loan_requests', 'feed_inventory', 'pen_worker_history', 'pen_name_history'],
   census:           ['census_counts', 'general_census', 'pen_worker_history', 'pen_name_history'],
   production:       ['production_log', 'pen_worker_history', 'pen_name_history'],
-  flockhealth:      ['production_log', 'census_counts', 'flock_health_log', 'batches'],
+  flockhealth:      ['production_log', 'census_counts', 'flock_health_log', 'batches', 'pen_worker_history', 'pen_name_history'],
   flocklifecycle:   ['batches', 'grower_logs', 'grower_daily_logs', 'flock_sales', 'vaccination_schedules', 'pens'],
   feedwatch:        ['feed_inventory', 'feed_inventory_log', 'feed_production', 'maize_records'],
   sales:            ['sales_log'],
@@ -72,6 +72,47 @@ export const PAGE_TABLES_MAP = {
   generallivestock: ['general_livestock_detailed', 'general_census'],
   settings:         ['workers', 'egg_price_settings', 'worker_permissions', 'pen_name_history', 'worker_name_aliases']
 };
+
+// Helper: Resolve pen display name for a specific date
+export function resolvePenDisplayName(penId, dateStr, nameHistory = [], fallbackName = 'Pen') {
+  if (!penId) return fallbackName;
+  const targetDate = dateStr || new Date().toISOString().split('T')[0];
+  const record = nameHistory.find(n =>
+    n.pen_id === penId &&
+    n.start_date <= targetDate &&
+    (!n.end_date || n.end_date >= targetDate) &&
+    n.is_primary !== false
+  );
+  return record?.display_name || fallbackName;
+}
+
+// Helper: Resolve all active worker assignments for a specific date
+export function resolveAssignmentsForDate(dateStr, workerHistory = [], nameHistory = [], pens = [], workers = []) {
+  const targetDate = dateStr || new Date().toISOString().split('T')[0];
+  const penLookup = Object.fromEntries(pens.map(p => [p.id, p]));
+  const workerLookup = Object.fromEntries(workers.map(w => [w.id, w]));
+
+  const matching = workerHistory.filter(a =>
+    a.start_date <= targetDate &&
+    (!a.end_date || a.end_date >= targetDate)
+  );
+
+  return matching.map(a => {
+    const pen = penLookup[a.pen_id] || { id: a.pen_id, name: 'Unknown Pen' };
+    const wrk = workerLookup[a.worker_id] || { id: a.worker_id, name: 'Staff' };
+    const displayName = resolvePenDisplayName(a.pen_id, targetDate, nameHistory, pen.name);
+
+    return {
+      id: a.id,
+      pen_id: a.pen_id,
+      worker_id: a.worker_id,
+      worker_name: wrk.name || 'Staff',
+      pen_name: displayName,
+      pen_physical_label: pen.name,
+      notes: a.notes
+    };
+  });
+}
 
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes cache lifetime
 

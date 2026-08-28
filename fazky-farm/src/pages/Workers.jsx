@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useData } from '../hooks/useData';
+import { useData, resolvePenDisplayName } from '../hooks/useData';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
 import { 
@@ -273,19 +273,13 @@ export default function Workers() {
 
                 const assignedPenNames = activeAssignments.map(a => {
                   const pen = penLookup[a.pen_id];
-                  const pnh = nameHistory.find(n => 
-                    n.pen_id === a.pen_id && 
-                    n.start_date <= todayStr && 
-                    (!n.end_date || n.end_date >= todayStr) &&
-                    n.is_primary !== false
-                  );
-                  return pnh?.display_name || pen?.name || 'Pen';
+                  return resolvePenDisplayName(a.pen_id, todayStr, nameHistory, pen?.name || 'Pen');
                 });
 
                 // Fallback to direct pen.worker_id if no history
                 if (assignedPenNames.length === 0) {
                   const directPens = allPens.filter(p => p.worker_id === w.id && !p.name?.toLowerCase().includes('retired'));
-                  directPens.forEach(p => assignedPenNames.push(p.name));
+                  directPens.forEach(p => assignedPenNames.push(resolvePenDisplayName(p.id, todayStr, nameHistory, p.name)));
                 }
 
                 const assignedPenIds = activeAssignments.map(a => a.pen_id);
@@ -308,12 +302,20 @@ export default function Workers() {
                 }, 0);
                 const activeLoanBal = Math.max(0, totalLoan - totalRepaid);
 
+                const getAssignmentDisplay = () => {
+                  if (assignedPenNames.length > 0) return assignedPenNames.join(', ');
+                  if (w.status === 'inactive') return 'Departed';
+                  if (w.role === 'admin') return 'General Operations';
+                  if (w.role === 'manager') return 'Farm Management';
+                  return 'Unassigned (Standby)';
+                };
+
                 return (
                   <div className="bg-bg-farm rounded-2xl p-3 border border-border-farm/70 space-y-2 text-xs">
                     <div className="flex justify-between items-center text-[11px]">
                       <span className="text-text-muted font-bold">Assigned Pens:</span>
                       <span className="font-bold text-dark-green truncate max-w-[150px]">
-                        {assignedPenNames.length > 0 ? assignedPenNames.join(', ') : (w.status === 'inactive' ? 'Departed' : 'Assisting / Unassigned')}
+                        {getAssignmentDisplay()}
                       </span>
                     </div>
 

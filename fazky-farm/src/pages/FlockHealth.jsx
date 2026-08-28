@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useData } from '../hooks/useData';
+import { useData, resolvePenDisplayName } from '../hooks/useData';
 import { useAuth } from '../context/AuthContext';
 import DatePicker from '../components/DatePicker';
 import { exportToExcel, parseImportFile } from '../lib/csvExportImport';
@@ -31,7 +31,7 @@ export default function FlockHealth() {
   const { role, worker } = useAuth();
   const importRef = useRef(null);
 
-  const [selectedDate, setSelectedDate] = useState('2026-08-05');
+  const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().split('T')[0]);
   
   // Auto-fetch historical month data on date selection if not cached
   useEffect(() => {
@@ -53,12 +53,17 @@ export default function FlockHealth() {
   const [vacNotes, setVacNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  // 1. Calculate Active Bird Count
+  // 1. Calculate Active Bird Count (from latest census on or before selectedDate)
   const calculateTotalBirds = () => {
     const counts = data.census_counts || [];
-    const dateCounts = counts.filter(c => c.date === selectedDate);
-    if (dateCounts.length === 0) return 360; // default total seed count
-    return dateCounts.reduce((sum, c) => sum + (parseInt(c.bird_count) || 0), 0);
+    if (counts.length === 0) return 0;
+    const validDates = [...new Set(counts.map(c => c.date))]
+      .filter(d => d <= selectedDate)
+      .sort((a, b) => new Date(b) - new Date(a));
+    const targetDate = validDates[0] || selectedDate;
+    return counts
+      .filter(c => c.date === targetDate)
+      .reduce((sum, c) => sum + (parseInt(c.bird_count, 10) || 0), 0);
   };
 
   const totalBirds = calculateTotalBirds();
@@ -272,28 +277,47 @@ export default function FlockHealth() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-farm">
-                {(data.pens || []).map((pen) => {
-                  const prodLog = (data.production_log || []).find(l => l.pen_id === pen.id && l.date === selectedDate) || {};
-                  const censusCount = (data.census_counts || [])
-                    .filter(c => c.pen_id === pen.id && c.date === selectedDate)
-                    .reduce((s, c) => s + (parseInt(c.bird_count) || 0), 0) || 40;
+                {(() => {
+                  const rawPens = data.pens || [];
+                  const nameHistory = data.pen_name_history || [];
+                  const prodLogs = data.production_log || [];
+                  const censusCounts = data.census_counts || [];
 
-                  const eggs = prodLog.total_eggs || 0;
-                  const feed = prodLog.total_feed || 0;
-                  const mortality = prodLog.mortality || 0;
-                  const rate = censusCount > 0 ? ((eggs / censusCount) * 100).toFixed(1) : '0.0';
+                  let pens = rawPens;
+                  if (selectedDate >= '2026-08-13') {
+                    pens = pens.filter(p => p.is_active !== false && !p.name?.toLowerCase().includes('retired'));
+                  }
 
-                  return (
-                    <tr key={pen.id} className="hover:bg-emerald-50/40 transition-colors">
-                      <td className="p-3 font-serif font-bold text-dark-green">{pen.name}</td>
-                      <td className="p-3 text-center font-bold">{censusCount}</td>
-                      <td className="p-3 text-center font-bold text-primary">{eggs}</td>
-                      <td className="p-3 text-center font-medium">{feed}</td>
-                      <td className="p-3 text-center font-bold text-red-accent">{mortality}</td>
-                      <td className="p-3 text-right font-bold text-dark-green font-serif">{rate}%</td>
-                    </tr>
-                  );
-                })}
+                  const validCensusDates = [...new Set(censusCounts.map(c => c.date))]
+                    .filter(d => d <= selectedDate)
+                    .sort((a, b) => new Date(b) - new Date(a));
+                  const targetCensusDate = validCensusDates[0] || selectedDate;
+
+                  return pens.map((pen) => {
+                    const penDisplayName = resolvePenDisplayName(pen.id, selectedDate, nameHistory, pen.name);
+                    const penLogs = prodLogs.filter(l => l.pen_id === pen.id && l.date === selectedDate);
+                    
+                    const censusCount = censusCounts
+                      .filter(c => c.pen_id === pen.id && c.date === targetCensusDate)
+                      .reduce((s, c) => s + (parseInt(c.bird_count, 10) || 0), 0);
+
+                    const eggs = penLogs.reduce((s, l) => s + (Number(l.total_eggs) || (Number(l.morning_eggs) || 0) + (Number(l.evening_eggs) || 0)), 0);
+                    const feed = penLogs.reduce((s, l) => s + (Number(l.total_feed) || (Number(l.morning_feed) || 0) + (Number(l.evening_feed) || 0)), 0);
+                    const mortality = penLogs.reduce((s, l) => s + (Number(l.mortality) || 0), 0);
+                    const rate = censusCount > 0 ? ((eggs / censusCount) * 100).toFixed(1) : '0.0';
+
+                    return (
+                      <tr key={pen.id} className="hover:bg-emerald-50/40 transition-colors">
+                        <td className="p-3 font-serif font-bold text-dark-green">{penDisplayName}</td>
+                        <td className="p-3 text-center font-bold">{censusCount}</td>
+                        <td className="p-3 text-center font-bold text-primary">{eggs}</td>
+                        <td className="p-3 text-center font-medium">{feed}</td>
+                        <td className="p-3 text-center font-bold text-red-accent">{mortality}</td>
+                        <td className="p-3 text-right font-bold text-dark-green font-serif">{rate}%</td>
+                      </tr>
+                    );
+                  });
+                })()}
               </tbody>
             </table>
           </div>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useData } from '../hooks/useData';
+import { useData, resolvePenDisplayName } from '../hooks/useData';
 import { useAuth } from '../context/AuthContext';
 import WeatherWidget from '../components/WeatherWidget';
 import DatePicker from '../components/DatePicker';
@@ -203,10 +203,18 @@ export default function Dashboard() {
 
   // Flock summary grid with per-pen daily P&L
   const getFlockSummary = () => {
-    const pens = data.pens || [];
+    const rawPens = data.pens || [];
     const workers = data.workers || [];
     const census = data.census_counts || [];
     const prodLogs = data.production_log || [];
+    const workerHistory = data.pen_worker_history || [];
+    const nameHistory = data.pen_name_history || [];
+
+    // Filter out inactive/retired pens for current/recent date
+    let pens = rawPens;
+    if (selectedDate >= '2026-08-13') {
+      pens = pens.filter(p => p.is_active !== false && !p.name?.toLowerCase().includes('retired'));
+    }
 
     // Egg price + feed cost from latest settings
     const priceSettings = (data.egg_price_settings || [])
@@ -215,38 +223,56 @@ export default function Dashboard() {
     const feedCostPerBag  = Number(priceSettings.feed_cost_per_bag)  || 3500; // ₦ per 25kg bag
 
     // Latest census date for bird count
-    const latestCensusDate = census
-      .map(c => c.date)
-      .sort((a, b) => new Date(b) - new Date(a))[0] || selectedDate;
+    const validCensusDates = [...new Set(census.map(c => c.date))]
+      .filter(d => d <= selectedDate)
+      .sort((a, b) => new Date(b) - new Date(a));
+    const targetCensusDate = validCensusDates[0] || selectedDate;
 
     return pens.map(pen => {
-      const worker = workers.find(w => w.id === pen.worker_id);
+      // Resolve primary display name on selectedDate
+      const displayName = resolvePenDisplayName(pen.id, selectedDate, nameHistory, pen.name);
+
+      // Resolve workers assigned to this pen on selectedDate
+      const penAssignments = workerHistory.filter(a =>
+        a.pen_id === pen.id &&
+        a.start_date <= selectedDate &&
+        (!a.end_date || a.end_date >= selectedDate)
+      );
+
+      const assignedWorkerNames = penAssignments
+        .map(a => workers.find(w => w.id === a.worker_id)?.name)
+        .filter(Boolean);
+
+      const workerTeam = assignedWorkerNames.length > 0
+        ? assignedWorkerNames.join(', ')
+        : (workers.find(w => w.id === pen.worker_id)?.name || 'Unassigned');
 
       // Bird count from latest census
-      const penCounts = census.filter(c => c.pen_id === pen.id && c.date === latestCensusDate);
+      const penCounts = census.filter(c => c.pen_id === pen.id && c.date === targetCensusDate);
       const totalBirds = penCounts.reduce((sum, c) => sum + (c.bird_count || 0), 0);
 
-      // Production for selected date
-      const log = prodLogs.find(l => l.pen_id === pen.id && l.date === selectedDate);
-      const morningEggs = Number(log?.morning_eggs) || 0;
-      const eveningEggs = Number(log?.evening_eggs) || 0;
+      // Production for selected date (aggregate across all workers in this pen)
+      const penLogs = prodLogs.filter(l => l.pen_id === pen.id && l.date === selectedDate);
+      const morningEggs = penLogs.reduce((s, l) => s + (Number(l.morning_eggs) || 0), 0);
+      const eveningEggs = penLogs.reduce((s, l) => s + (Number(l.evening_eggs) || 0), 0);
       const totalEggs   = morningEggs + eveningEggs;
-      const morningFeed  = Number(log?.morning_feed) || 0;
-      const eveningFeed  = Number(log?.evening_feed) || 0;
+      const morningFeed = penLogs.reduce((s, l) => s + (Number(l.morning_feed) || 0), 0);
+      const eveningFeed = penLogs.reduce((s, l) => s + (Number(l.evening_feed) || 0), 0);
       const totalFeedBags = morningFeed + eveningFeed;   // stored & displayed in bags (1 bag = 25 kg)
-      const mortality    = Number(log?.mortality) || 0;
+      const mortality   = penLogs.reduce((s, l) => s + (Number(l.mortality) || 0), 0);
 
       // P&L calculation — feed already stored in bags, so no ÷25 needed
       const revenue  = (totalEggs / 30) * pricePerCrate;  // eggs → crates × price
       const feedCost = totalFeedBags * feedCostPerBag;     // bags × ₦/bag
       const netPnl   = revenue - feedCost;
-      const hasData  = log != null;
+      const hasData  = penLogs.length > 0;
 
       return {
         id: pen.id,
-        name: pen.name,
+        name: displayName,
+        physicalLabel: pen.name,
         generation: pen.generation,
-        workerName: worker ? worker.name : 'Unassigned',
+        workerName: workerTeam,
         birdCount: totalBirds,
         totalEggs,
         totalFeedBags,

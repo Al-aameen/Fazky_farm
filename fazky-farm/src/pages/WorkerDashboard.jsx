@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { useData } from '../hooks/useData';
+import { useData, resolvePenDisplayName } from '../hooks/useData';
 import { 
   UserCheck, 
   Grid, 
@@ -13,10 +13,10 @@ import {
   AlertCircle, 
   Clock, 
   PiggyBank, 
-  ArrowRight,
-  TrendingUp,
-  Layers,
-  HeartPulse
+  ArrowRight, 
+  TrendingUp, 
+  Layers, 
+  HeartPulse 
 } from 'lucide-react';
 
 export default function WorkerDashboard({ setActivePage }) {
@@ -42,8 +42,25 @@ export default function WorkerDashboard({ setActivePage }) {
     }
   }, [todayStr, ensureDateLoaded]);
 
-  // 1. My Assigned Pens
-  const myPens = (data.pens || []).filter(pen => pen.worker_id === worker?.id);
+  // 1. My Assigned Pens (from active pen_worker_history or direct pen.worker_id)
+  const workerHistory = data.pen_worker_history || [];
+  const nameHistory = data.pen_name_history || [];
+  const allPens = data.pens || [];
+  const activeAssignments = workerHistory.filter(a => 
+    a.worker_id === worker?.id && 
+    a.start_date <= todayStr && 
+    (!a.end_date || a.end_date >= todayStr)
+  );
+
+  const assignedPenIds = new Set(activeAssignments.map(a => a.pen_id));
+  const myPens = allPens
+    .filter(p => assignedPenIds.has(p.id) || p.worker_id === worker?.id)
+    .filter(p => p.is_active !== false && !p.name?.toLowerCase().includes('retired'))
+    .map(p => ({
+      ...p,
+      name: resolvePenDisplayName(p.id, todayStr, nameHistory, p.name),
+      physicalLabel: p.name
+    }));
 
   // 2. Latest Census count for my pens
   const censusCounts = data.census_counts || [];

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useData } from '../hooks/useData';
+import { useData, resolvePenDisplayName } from '../hooks/useData';
 import { useAuth } from '../context/AuthContext';
 import DatePicker from '../components/DatePicker';
 import LedgerDigitizerModal from '../components/LedgerDigitizerModal';
@@ -10,7 +10,7 @@ export default function ProductionLog() {
   const { data, insertRecord, updateRecord, bulkInsertRecords, ensureDateLoaded } = useData();
   const { role, worker } = useAuth();
   
-  const [selectedDate, setSelectedDate] = useState('2026-08-05'); // Default seed date
+  const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [productionData, setProductionData] = useState({}); // { penId: { morning_eggs, evening_eggs, morning_feed, evening_feed, mortality } }
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -50,17 +50,10 @@ export default function ProductionLog() {
 
       return filtered.map(a => {
         const pen = penLookup[a.pen_id] || { id: a.pen_id, name: 'Unknown Pen' };
-        const wrk = workerLookup[a.worker_id] || { id: a.worker_id, name: 'Unknown Worker' };
+        const wrk = workerLookup[a.worker_id] || { id: a.worker_id, name: 'Staff' };
         
         // Find pen's primary display name on this specific date
-        const pnh = nameHistory.find(n => 
-          n.pen_id === a.pen_id && 
-          n.start_date <= selectedDate && 
-          (!n.end_date || n.end_date >= selectedDate) &&
-          n.is_primary !== false
-        );
-
-        const penDisplayName = pnh?.display_name || pen.name;
+        const penDisplayName = resolvePenDisplayName(a.pen_id, selectedDate, nameHistory, pen.name);
         const entryKey = `${a.pen_id}_${a.worker_id}`;
 
         return {
@@ -75,16 +68,20 @@ export default function ProductionLog() {
       });
     }
 
-    // Fallback if pen_worker_history is not yet loaded: use active physical pens
-    const activePens = allPens.filter(p => p.is_active !== false && !p.name?.toLowerCase().includes('retired'));
+    // Fallback if pen_worker_history is empty or not yet loaded: use active physical pens
+    let activePens = allPens;
+    if (selectedDate >= '2026-08-13') {
+      activePens = activePens.filter(p => p.is_active !== false && !p.name?.toLowerCase().includes('retired'));
+    }
     const rows = [];
     activePens.forEach(p => {
+      const penDisplayName = resolvePenDisplayName(p.id, selectedDate, nameHistory, p.name);
       rows.push({
         entryKey: p.id,
         pen_id: p.id,
         worker_id: p.worker_id || null,
-        worker_name: workerLookup[p.worker_id]?.name || p.name,
-        pen_name: p.name,
+        worker_name: workerLookup[p.worker_id]?.name || 'Unassigned Staff',
+        pen_name: penDisplayName,
         pen_physical_label: p.name
       });
     });
