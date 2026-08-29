@@ -1,35 +1,38 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { useData } from '../hooks/useData';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useData, resolvePenDisplayName } from '../hooks/useData';
 import { useAuth } from '../context/AuthContext';
 import DatePicker from '../components/DatePicker';
+import GridShortcutsModal from '../components/GridShortcutsModal';
+import { useGridNavigation } from '../hooks/useGridNavigation';
 import { exportToExcel, parseImportFile } from '../lib/csvExportImport';
-import { Plus, Save, Edit3, Settings, ShieldAlert, Check, Download, Search, Upload } from 'lucide-react';
+import { Plus, Save, Edit3, Settings, ShieldAlert, Check, Download, Search, Upload, Calendar, Hash, Tag, HelpCircle } from 'lucide-react';
 
 export default function CensusMatrix() {
   const { data, insertRecord, updateRecord, isOnline, bulkInsertRecords, ensureDateLoaded } = useData();
   const { role, worker } = useAuth();
 
-  const currentMonthStr = new Date().toISOString().split('T')[0].slice(0, 7);
-  const [selectedMonth, setSelectedMonth] = useState(currentMonthStr); // e.g. '2026-08'
-  const [gridData, setGridData] = useState({}); // Stores cell values: { 'penId-side-slot': count }
+  const todayStr = () => new Date().toISOString().split('T')[0];
+  const [selectedDate, setSelectedDate] = useState(todayStr); // Exact period date (e.g. 2026-08-28 or 2025-12-31)
+  const [countDateInput, setCountDateInput] = useState('');    // Date physically counted
+  const [periodLabelInput, setPeriodLabelInput] = useState(''); // e.g. "December 2025 Closing"
+  const [gridData, setGridData] = useState({});               // `${penId}-${workerId}-${side}-${slot}` -> count
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [showShortcutsModal, setShowShortcutsModal] = useState(false);
   const censusImportRef = useRef(null);
 
-  // Auto-fetch historical census counts for the selected month if not cached
+  // Auto-fetch historical census counts for the selected date if not cached
   useEffect(() => {
-    if (selectedMonth && ensureDateLoaded) {
-      ensureDateLoaded('census_counts', `${selectedMonth}-01`);
+    if (selectedDate && ensureDateLoaded) {
+      ensureDateLoaded('census_counts', selectedDate);
     }
-  }, [selectedMonth, ensureDateLoaded]);
+  }, [selectedDate, ensureDateLoaded]);
 
   // Modal states for Add Pen
   const [showAddPen, setShowAddPen] = useState(false);
   const [newPenName, setNewPenName] = useState('');
   const [newPenBlockId, setNewPenBlockId] = useState('');
-  const [newPenWorkerId, setNewPenWorkerId] = useState('');
-  const [newPenHasSides, setNewPenHasSides] = useState(false);
   const [newPenSlotCount, setNewPenSlotCount] = useState(15);
   const [newPenGeneration, setNewPenGeneration] = useState('');
 
@@ -43,146 +46,149 @@ export default function CensusMatrix() {
   const [lsVendor, setLsVendor] = useState('');
   const [lsRemarks, setLsRemarks] = useState('');
 
-  // ── Date-Adaptive Pen & Worker Team Resolution for Census ────────────────
-  const targetDate = `${selectedMonth}-15`;
-
-  const getVisiblePens = () => {
-    const allPens = [...(data.pens || [])].sort((a, b) => a.display_order - b.display_order);
-    const nameHistory = data.pen_name_history || [];
+  // ── 4A. Build Worker-Based Column Structure for Selected Date ──────────────
+  const { gridColumns, penGroups, hasAnyTwoSections, maxSlots } = useMemo(() => {
     const rawAssignments = data.pen_worker_history || [];
+    const nameHistory = data.pen_name_history || [];
+    const allPens = data.pens || [];
     const allWorkers = data.workers || [];
+
+    const penLookup = Object.fromEntries(allPens.map(p => [p.id, p]));
     const workerLookup = Object.fromEntries(allWorkers.map(w => [w.id, w]));
 
-    // Find active assignments on targetDate
-    const dateAssignments = rawAssignments.filter(a => {
-      const matchStart = a.start_date <= targetDate;
-      const matchEnd = !a.end_date || a.end_date >= targetDate;
+    // Query active worker assignments on the EXACT selectedDate
+    let dateAssignments = rawAssignments.filter(a => {
+      const matchStart = a.start_date <= selectedDate;
+      const matchEnd = !a.end_date || a.end_date >= selectedDate;
       return matchStart && matchEnd;
     });
 
-    // If staff, filter by worker's assigned pens
-    let activePens = allPens;
     if (role === 'staff' && worker?.id) {
-      const assignedPenIds = new Set(dateAssignments.filter(a => a.worker_id === worker.id).map(a => a.pen_id));
-      activePens = activePens.filter(p => assignedPenIds.has(p.id) || p.worker_id === worker.id);
-    } else {
-      // Hide retired pens if selectedMonth is on or after Aug 2026
-      if (selectedMonth >= '2026-08') {
-        activePens = activePens.filter(p => !p.name?.toLowerCase().includes('retired'));
-      }
+      dateAssignments = dateAssignments.filter(a => a.worker_id === worker.id);
     }
 
-    return activePens.map(p => {
-      // Resolve display name on this date
-      const pnh = nameHistory.find(n => 
-        n.pen_id === p.id && 
-        n.start_date <= targetDate && 
-        (!n.end_date || n.end_date >= targetDate) &&
-        n.is_primary !== false
-      );
-      const displayName = pnh?.display_name || p.name;
-
-      // Find workers assigned to this pen on this date
-      const penWorkerAssignments = dateAssignments.filter(a => a.pen_id === p.id);
-      const assignedWorkerNames = penWorkerAssignments.map(a => workerLookup[a.worker_id]?.name).filter(Boolean);
-      const workerTeamStr = assignedWorkerNames.length > 0 ? assignedWorkerNames.join(', ') : 'Unassigned';
-
-      return {
-        ...p,
-        resolvedName: displayName,
-        workerTeam: workerTeamStr,
-        workerList: assignedWorkerNames,
-        slot_count: p.slot_count || 15,
-        has_sides: p.has_sides !== false // default true for 2-sided cages
-      };
+    // Sort assignments by pen display order, then worker name
+    dateAssignments.sort((a, b) => {
+      const penA = penLookup[a.pen_id] || {};
+      const penB = penLookup[b.pen_id] || {};
+      const ordA = penA.display_order ?? 0;
+      const ordB = penB.display_order ?? 0;
+      if (ordA !== ordB) return ordA - ordB;
+      const nameA = workerLookup[a.worker_id]?.name || '';
+      const nameB = workerLookup[b.worker_id]?.name || '';
+      return nameA.localeCompare(nameB);
     });
-  };
 
-  const visiblePens = getVisiblePens();
-
-  // Group visible pens by pen block, filtered by search term
-  const getGroupedPens = () => {
-    const blocks = data.pen_blocks || [];
-    const lc = searchTerm.toLowerCase();
-    const grouped = [];
-
-    // Group active pens by block or single group
-    if (blocks.length > 0) {
-      blocks.forEach(block => {
-        const pensInBlock = visiblePens.filter(p => {
-          if (!lc) return p.pen_block_id === block.id;
-          const wName = (p.workerTeam || '').toLowerCase();
-          const pName = (p.resolvedName || p.name || '').toLowerCase();
-          const bName = (block.name || '').toLowerCase();
-          return p.pen_block_id === block.id &&
-            (pName.includes(lc) || wName.includes(lc) || bName.includes(lc));
+    // Fallback if no assignments exist for this date: map active pens with unassigned staff
+    if (dateAssignments.length === 0) {
+      let activePens = allPens;
+      if (selectedDate >= '2026-08-13') {
+        activePens = activePens.filter(p => p.is_active !== false && !p.name?.toLowerCase().includes('retired'));
+      }
+      activePens.forEach(p => {
+        dateAssignments.push({
+          id: `fallback-${p.id}`,
+          pen_id: p.id,
+          worker_id: p.worker_id || null,
+          has_two_sections: false
         });
-        if (pensInBlock.length > 0) {
-          grouped.push({ blockId: block.id, blockName: block.name, pens: pensInBlock });
-        }
       });
     }
 
-    // Fallback single block if pens don't have block IDs
-    if (grouped.length === 0 && visiblePens.length > 0) {
-      const filtered = visiblePens.filter(p => {
-        if (!lc) return true;
-        return (p.resolvedName || p.name || '').toLowerCase().includes(lc) || 
-               (p.workerTeam || '').toLowerCase().includes(lc);
+    const columns = [];
+    const groupsMap = new Map();
+    let hasTwo = false;
+    let maxSlot = 15;
+
+    dateAssignments.forEach(a => {
+      const pen = penLookup[a.pen_id] || { id: a.pen_id, name: 'Pen' };
+      const wrk = workerLookup[a.worker_id] || { id: a.worker_id || 'unassigned', name: 'Unassigned' };
+      const penDisplayName = resolvePenDisplayName(a.pen_id, selectedDate, nameHistory, pen.name);
+      const slotCount = pen.slot_count || 15;
+      if (slotCount > maxSlot) maxSlot = slotCount;
+
+      const isTwo = !!a.has_two_sections;
+      if (isTwo) hasTwo = true;
+      const sections = isTwo ? ['a', 'b'] : ['a'];
+
+      // Build group structure
+      if (!groupsMap.has(a.pen_id)) {
+        groupsMap.set(a.pen_id, {
+          penId: a.pen_id,
+          penName: penDisplayName,
+          physicalLabel: pen.name,
+          slotCount,
+          workers: []
+        });
+      }
+
+      const penGroup = groupsMap.get(a.pen_id);
+      const workerCols = [];
+
+      sections.forEach(section => {
+        const colDef = {
+          key: `${a.pen_id}-${a.worker_id || 'unassigned'}-${section}`,
+          penId: a.pen_id,
+          penName: penDisplayName,
+          workerId: a.worker_id || 'unassigned',
+          workerName: wrk.name || 'Staff',
+          section,
+          hasTwoSections: isTwo,
+          slotCount
+        };
+        columns.push(colDef);
+        workerCols.push(colDef);
       });
-      if (filtered.length > 0) {
-        grouped.push({ blockId: 'all-houses', blockName: 'Active Poultry Houses', pens: filtered });
-      }
-    }
 
-    return grouped;
-  };
-
-  const groupedPens = getGroupedPens();
-
-  // Flattened columns for cells: array of { pen, side, key }
-  const gridColumns = [];
-  groupedPens.forEach(g => {
-    g.pens.forEach(pen => {
-      if (pen.has_sides) {
-        gridColumns.push({ pen, side: 'left', key: `${pen.id}-left` });
-        gridColumns.push({ pen, side: 'right', key: `${pen.id}-right` });
-      } else {
-        gridColumns.push({ pen, side: 'single', key: `${pen.id}-single` });
-      }
+      penGroup.workers.push({
+        workerId: a.worker_id || 'unassigned',
+        workerName: wrk.name || 'Staff',
+        hasTwoSections: isTwo,
+        columns: workerCols
+      });
     });
-  });
 
-  const maxSlots = visiblePens.length > 0 ? Math.max(...visiblePens.map(p => p.slot_count || 15)) : 15;
+    const groups = Array.from(groupsMap.values()).map(g => ({
+      ...g,
+      totalCols: g.workers.reduce((s, w) => s + w.columns.length, 0)
+    }));
 
-  // Initialize local grid cells state when selectedMonth or census changes
+    return {
+      gridColumns: columns,
+      penGroups: groups,
+      hasAnyTwoSections: hasTwo,
+      maxSlots: maxSlot
+    };
+  }, [data.pen_worker_history, data.pen_name_history, data.pens, data.workers, selectedDate, role, worker?.id]);
+
+  // ── 4C. Load Existing Census Data for Selected Date ────────────────────────
   useEffect(() => {
     const counts = data.census_counts || [];
     const newGrid = {};
+    let foundCountDate = '';
+    let foundPeriodLabel = '';
 
     counts.forEach(c => {
-      if (c.date && c.date.startsWith(selectedMonth)) {
-        const key = `${c.pen_id}-${c.side}-${c.slot_number}`;
+      if (c.date === selectedDate) {
+        const wId = c.worker_id || 'unassigned';
+        const section = c.side || 'a';
+        const key = `${c.pen_id}-${wId}-${section}-${c.slot_number}`;
         newGrid[key] = c.bird_count;
-      }
-    });
 
-    // Populate missing items as default
-    gridColumns.forEach(col => {
-      for (let slot = 1; slot <= col.pen.slot_count; slot++) {
-        const key = `${col.pen.id}-${col.side}-${slot}`;
-        if (newGrid[key] === undefined) {
-          newGrid[key] = '';
-        }
+        if (c.count_date && !foundCountDate) foundCountDate = c.count_date;
+        if (c.period_label && !foundPeriodLabel) foundPeriodLabel = c.period_label;
       }
     });
 
     setGridData(newGrid);
-  }, [selectedMonth, data.census_counts, data.pens]);
+    if (foundCountDate) setCountDateInput(foundCountDate);
+    else setCountDateInput('');
+    if (foundPeriodLabel) setPeriodLabelInput(foundPeriodLabel);
+    else setPeriodLabelInput('');
+  }, [selectedDate, data.census_counts]);
 
-  const handleCellChange = (penId, side, slot, val) => {
-    const key = `${penId}-${side}-${slot}`;
-    // Accept only integers
+  const handleCellChange = (penId, workerId, section, slot, val) => {
+    const key = `${penId}-${workerId}-${section}-${slot}`;
     const num = val === '' ? '' : parseInt(val, 10);
     if (isNaN(num) && val !== '') return;
 
@@ -192,216 +198,234 @@ export default function CensusMatrix() {
     }));
   };
 
-  // Calculates pen subtotal (sum of all slots)
-  const getPenTotal = (penId, side) => {
+  // ── 4E. Totals Calculations ────────────────────────────────────────────────
+  const getColumnTotal = (col) => {
     let total = 0;
-    const pen = visiblePens.find(p => p.id === penId);
-    if (!pen) return 0;
-
-    for (let slot = 1; slot <= pen.slot_count; slot++) {
-      const key = `${penId}-${side}-${slot}`;
+    for (let slot = 1; slot <= col.slotCount; slot++) {
+      const key = `${col.penId}-${col.workerId}-${col.section}-${slot}`;
       total += Number(gridData[key]) || 0;
     }
     return total;
   };
 
+  const getPenTotal = (penId) => {
+    const penCols = gridColumns.filter(c => c.penId === penId);
+    return penCols.reduce((sum, col) => sum + getColumnTotal(col), 0);
+  };
+
+  const getGrandTotal = () => {
+    return gridColumns.reduce((sum, col) => sum + getColumnTotal(col), 0);
+  };
+
+  const {
+    anchorCell,
+    focusCell,
+    selectionRange,
+    isCellSelected,
+    isCellAnchor,
+    hasMultiSelection,
+    selectionStats,
+    registerRef,
+    handleCellMouseDown,
+    handleCellMouseEnter,
+    handleKeyDown
+  } = useGridNavigation({
+    numRows: maxSlots,
+    numCols: gridColumns.length,
+    getCellValue: (r, c) => {
+      const col = gridColumns[c];
+      if (!col) return '';
+      const slotNumber = r + 1;
+      const key = `${col.penId}-${col.workerId}-${col.section}-${slotNumber}`;
+      return gridData[key] ?? '';
+    },
+    setCellValue: (r, c, val) => {
+      const col = gridColumns[c];
+      if (!col) return;
+      const slotNumber = r + 1;
+      handleCellChange(col.penId, col.workerId, col.section, slotNumber, val);
+    },
+    setMultipleCellValues: (updates) => {
+      setGridData(prev => {
+        const next = { ...prev };
+        updates.forEach(({ r, c, val }) => {
+          const col = gridColumns[c];
+          if (!col) return;
+          const slotNumber = r + 1;
+          const key = `${col.penId}-${col.workerId}-${col.section}-${slotNumber}`;
+          next[key] = val;
+        });
+        return next;
+      });
+    },
+    isCellEditable: (r, c) => {
+      const col = gridColumns[c];
+      if (!col) return false;
+      return (r + 1) <= col.slotCount;
+    },
+    isDecimalCol: () => false
+  });
+
+  // ── 4D. Save Census Grid ───────────────────────────────────────────────────
   const handleSaveGrid = async () => {
+    if (!isOnline) {
+      alert('You are currently offline. Please reconnect to save changes.');
+      return;
+    }
+
     setSaving(true);
     setSaveSuccess(false);
+
     try {
-      const existingCounts = data.census_counts || [];
+      const recordsToUpsert = [];
+      const nowCountDate = countDateInput || selectedDate;
+      const nowLabel = periodLabelInput.trim() || null;
 
-      // Save all modified / filled cells
-      for (const col of gridColumns) {
-        for (let slot = 1; slot <= col.pen.slot_count; slot++) {
-          const key = `${col.pen.id}-${col.side}-${slot}`;
-          const currentCount = Number(gridData[key]) || 0;
+      gridColumns.forEach(col => {
+        const wId = col.workerId === 'unassigned' ? null : col.workerId;
+        for (let slot = 1; slot <= col.slotCount; slot++) {
+          const key = `${col.penId}-${col.workerId}-${col.section}-${slot}`;
+          const val = Number(gridData[key]) || 0;
 
-          // Check if there is already a record in cache
-          const existing = existingCounts.find(c =>
-            c.pen_id === col.pen.id &&
-            c.side === col.side &&
-            c.slot_number === slot &&
-            c.date && c.date.startsWith(selectedMonth)
-          );
-
-          const targetDate = `${selectedMonth}-01`;
-
-          if (existing) {
-            // Update if value changed
-            if (existing.bird_count !== currentCount) {
-              await updateRecord('census_counts', {
-                id: existing.id,
-                bird_count: currentCount,
-                updated_at: new Date().toISOString()
-              });
-            }
-          } else {
-            // Insert new record
-            await insertRecord('census_counts', {
-              pen_id: col.pen.id,
-              side: col.side,
-              slot_number: slot,
-              bird_count: currentCount,
-              date: targetDate
-            });
-          }
+          recordsToUpsert.push({
+            pen_id: col.penId,
+            worker_id: wId,
+            side: col.section,
+            slot_number: slot,
+            bird_count: val,
+            date: selectedDate,
+            count_date: nowCountDate,
+            period_label: nowLabel,
+            updated_at: new Date().toISOString()
+          });
         }
+      });
+
+      const res = await bulkInsertRecords('census_counts', recordsToUpsert);
+      if (res && res.error) {
+        throw new Error(res.error);
       }
+
       setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 3000);
+      setTimeout(() => setSaveSuccess(false), 4000);
     } catch (err) {
       console.error('Failed to save census matrix:', err);
+      alert('Failed to save census matrix: ' + err.message);
     } finally {
       setSaving(false);
     }
   };
 
-  // Add new pen (Admin action)
-  const handleAddPenSubmit = async (e) => {
-    e.preventDefault();
-    if (!newPenName || !newPenBlockId) return;
-
-    try {
-      const order = (data.pens || []).length + 1;
-      await insertRecord('pens', {
-        name: newPenName,
-        pen_block_id: newPenBlockId,
-        worker_id: newPenWorkerId || null,
-        has_sides: newPenHasSides,
-        slot_count: Number(newPenSlotCount),
-        generation: newPenGeneration || '',
-        display_order: order,
-        is_active: true
-      });
-
-      setShowAddPen(false);
-      setNewPenName('');
-      setNewPenGeneration('');
-    } catch (err) {
-      console.error('Failed to add pen:', err);
-    }
-  };
-
-  // Add general livestock (Admin/Manager action)
-  const handleAddLivestockSubmit = async (e) => {
-    e.preventDefault();
-    if (!lsBreed) return;
-
-    // Validate to prevent nan/empty values from being stored
-    if (!lsCategory || lsCategory === 'nan' ||
-        !lsBreed || lsBreed === 'nan') {
-      alert('Please enter valid Category and Type/Breed values before saving.');
-      return;
-    }
-
-    try {
-      await insertRecord('general_census', {
-        category: lsCategory,
-        type_breed: lsBreed,
-        male: Number(lsMale),
-        female: Number(lsFemale),
-        unsexed: Number(lsUnsexed),
-        date: selectedDate,
-        vendor: lsVendor || '',
-        remarks: lsRemarks || ''
-      });
-      setShowAddLivestock(false);
-      setLsBreed('');
-      setLsMale(0);
-      setLsFemale(0);
-      setLsUnsexed(0);
-      setLsVendor('');
-      setLsRemarks('');
-    } catch (err) {
-      console.error('Failed to add livestock:', err);
-    }
-  };
+  // Filter columns by search term
+  const filteredColumns = useMemo(() => {
+    if (!searchTerm) return gridColumns;
+    const lc = searchTerm.toLowerCase();
+    return gridColumns.filter(c => 
+      c.penName.toLowerCase().includes(lc) || 
+      c.workerName.toLowerCase().includes(lc)
+    );
+  }, [gridColumns, searchTerm]);
 
   return (
     <div className="p-6 space-y-6">
-      {/* Action Header bar */}
-      <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between bg-white border border-border-farm rounded-2xl p-4 shadow-sm">
+      {/* ── Action Header Bar ── */}
+      <div className="flex flex-col lg:flex-row gap-4 items-start lg:items-center justify-between bg-white border border-border-farm rounded-2xl p-4 shadow-sm">
         <div className="flex items-center gap-3">
           <span className="text-2xl">📊</span>
           <div>
-            <h3 className="font-serif text-dark-green font-bold text-lg leading-snug">Monthly Bird Census</h3>
+            <h3 className="font-serif text-dark-green font-bold text-lg leading-snug">Bird Census Matrix</h3>
             <p className="text-[10px] text-text-muted font-sans font-medium uppercase tracking-wider mt-0.5">
-              Monthly cage slot count matrix (daily mortalities recorded in Production Log)
+              Worker-based slot counts ({gridColumns.length} counting section{gridColumns.length !== 1 ? 's' : ''} on this date)
             </p>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-          {/* Formatted Monthly DatePicker */}
+        <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
+          {/* Exact Date Picker */}
           <DatePicker
-            label="Census Month"
-            mode="month"
-            value={selectedMonth}
-            onChange={setSelectedMonth}
+            label="Census Period Date"
+            value={selectedDate}
+            onChange={setSelectedDate}
           />
+
+          {/* Optional: Count Performed On input */}
+          <div className="flex flex-col">
+            <label className="text-[9px] font-black uppercase tracking-wider text-text-muted mb-0.5">
+              Count Performed On
+            </label>
+            <input
+              type="date"
+              value={countDateInput}
+              onChange={(e) => setCountDateInput(e.target.value)}
+              placeholder="Physical count date"
+              className="bg-bg-farm border border-border-farm rounded-xl px-2.5 py-1.5 text-xs font-semibold text-text-primary focus:ring-2 focus:ring-primary outline-none"
+              title="The date physical counting actually occurred"
+            />
+          </div>
+
+          {/* Optional: Period Label input */}
+          <div className="flex flex-col">
+            <label className="text-[9px] font-black uppercase tracking-wider text-text-muted mb-0.5">
+              Period Label
+            </label>
+            <input
+              type="text"
+              value={periodLabelInput}
+              onChange={(e) => setPeriodLabelInput(e.target.value)}
+              placeholder="e.g. Dec 2025 Closing"
+              className="bg-bg-farm border border-border-farm rounded-xl px-2.5 py-1.5 text-xs font-semibold text-text-primary focus:ring-2 focus:ring-primary outline-none max-w-[160px]"
+            />
+          </div>
 
           {/* Export Action Button */}
           <button
             type="button"
-            onClick={() => exportToExcel(`fazky_bird_census_${selectedMonth}`, 'Census', data.census_counts || [])}
-            className="flex items-center gap-1.5 bg-white hover:bg-emerald-50 text-dark-green font-bold px-3 py-1.5 rounded-lg text-xs border border-border-farm shadow-sm transition-all"
-            title="Export as Excel (.xlsx) or CSV"
+            onClick={() => {
+              const exportRows = [];
+              gridColumns.forEach(col => {
+                for (let slot = 1; slot <= col.slotCount; slot++) {
+                  const key = `${col.penId}-${col.workerId}-${col.section}-${slot}`;
+                  exportRows.push({
+                    date: selectedDate,
+                    count_date: countDateInput || selectedDate,
+                    period_label: periodLabelInput || '',
+                    pen_name: col.penName,
+                    worker_name: col.workerName,
+                    section: col.section,
+                    slot_number: slot,
+                    bird_count: Number(gridData[key]) || 0
+                  });
+                }
+              });
+              exportToExcel(`fazky_bird_census_${selectedDate}`, 'Census', exportRows);
+            }}
+            className="flex items-center gap-1.5 bg-white hover:bg-emerald-50 text-dark-green font-bold px-3 py-2 rounded-xl text-xs border border-border-farm shadow-sm transition-all"
+            title="Export current census grid as Excel (.xlsx)"
           >
             <Download className="w-3.5 h-3.5 text-primary" />
             <span className="hidden sm:inline">Export</span>
           </button>
 
-          {/* Import Census Button */}
-          <input
-            type="file"
-            ref={censusImportRef}
-            className="hidden"
-            accept=".csv,.xlsx,.xls"
-            onChange={async (e) => {
-              const file = e.target.files?.[0];
-              if (!file) return;
-              try {
-                const rows = await parseImportFile(file);
-                const result = await bulkInsertRecords('census_counts', rows);
-                alert(`✅ Imported ${result?.count ?? rows.length} census records successfully.`);
-              } catch (err) {
-                alert('❌ Import failed: ' + err.message);
-              } finally {
-                e.target.value = '';
-              }
-            }}
-          />
+          {/* Keyboard Shortcuts Reference Button */}
           <button
             type="button"
-            onClick={() => censusImportRef.current?.click()}
-            className="flex items-center gap-1.5 bg-white hover:bg-blue-50 text-dark-green font-bold px-3 py-1.5 rounded-lg text-xs border border-border-farm shadow-sm transition-all"
-            title="Import from CSV or Excel (.xlsx) — columns: pen_id, side, slot_number, bird_count, date"
+            onClick={() => setShowShortcutsModal(true)}
+            className="flex items-center gap-1.5 bg-white hover:bg-emerald-50 text-dark-green font-bold px-3 py-2 rounded-xl text-xs border border-border-farm shadow-sm transition-all"
+            title="Keyboard navigation & shortcuts cheat sheet"
           >
-            <Upload className="w-3.5 h-3.5 text-blue-600" />
-            <span className="hidden sm:inline">Import</span>
+            <HelpCircle className="w-3.5 h-3.5 text-primary" />
+            <span className="hidden md:inline">Shortcuts</span>
           </button>
-
-          {/* Add Pen (Admin only) */}
-
-          {role === 'admin' && (
-            <button
-              onClick={() => setShowAddPen(true)}
-              className="flex items-center gap-1 bg-white hover:bg-bg-farm border border-border-farm text-primary font-bold px-3.5 py-1.5 rounded-lg text-xs shadow-sm transition-all"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              Add Pen
-            </button>
-          )}
 
           {/* Save All */}
           <button
             onClick={handleSaveGrid}
             disabled={saving}
-            className={`flex items-center gap-1.5 text-white font-bold px-4 py-1.5 rounded-lg text-xs shadow-md transition-all ${saveSuccess
-                ? 'bg-primary'
+            className={`flex items-center gap-1.5 text-white font-bold px-4 py-2 rounded-xl text-xs shadow-md transition-all ${
+              saveSuccess
+                ? 'bg-emerald-700'
                 : 'bg-primary hover:bg-dark-green disabled:opacity-50'
-              }`}
+            }`}
           >
             {saveSuccess ? (
               <>
@@ -418,148 +442,176 @@ export default function CensusMatrix() {
         </div>
       </div>
 
-      {/* Smart Search / Filter Bar */}
-      <div className="flex items-center gap-3 bg-white border border-border-farm rounded-xl px-4 py-2.5 shadow-sm">
-        <Search className="w-4 h-4 text-text-muted shrink-0" />
-        <input
-          type="search"
-          value={searchTerm}
-          onChange={e => setSearchTerm(e.target.value)}
-          placeholder="Filter by pen name, worker, or block…"
-          className="flex-1 bg-transparent text-sm font-sans focus:outline-none text-text-primary placeholder:text-text-muted"
-        />
-        {searchTerm && (
-          <span className="text-[10px] font-bold text-primary bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-            {groupedPens.reduce((n, g) => n + g.pens.length, 0)} column{groupedPens.reduce((n, g) => n + g.pens.length, 0) !== 1 ? 's' : ''}
-          </span>
-        )}
+      {/* ── Summary & Search Bar ── */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="md:col-span-2 flex items-center gap-3 bg-white border border-border-farm rounded-2xl px-4 py-2.5 shadow-sm">
+          <Search className="w-4 h-4 text-text-muted shrink-0" />
+          <input
+            type="search"
+            value={searchTerm}
+            onChange={e => setSearchTerm(e.target.value)}
+            placeholder="Filter by pen name or worker..."
+            className="flex-1 bg-transparent text-sm font-sans focus:outline-none text-text-primary placeholder:text-text-muted"
+          />
+        </div>
+
+        <div className="bg-emerald-50 border border-emerald-200/80 rounded-2xl p-3 flex items-center justify-between shadow-sm">
+          <div>
+            <span className="text-[9px] font-black uppercase tracking-wider text-emerald-800 block">Total Live Birds</span>
+            <span className="font-serif font-bold text-lg text-dark-green">{getGrandTotal().toLocaleString()} birds</span>
+          </div>
+          <span className="text-xl">🐣</span>
+        </div>
+
+        <div className="bg-white border border-border-farm rounded-2xl p-3 flex items-center justify-between shadow-sm">
+          <div>
+            <span className="text-[9px] font-black uppercase tracking-wider text-text-muted block">Active Sections</span>
+            <span className="font-mono font-bold text-lg text-primary">{gridColumns.length} columns</span>
+          </div>
+          <span className="text-xl">🏠</span>
+        </div>
       </div>
 
-      {/* Main Census Matrix Container */}
-      {visiblePens.length === 0 ? (
+      {/* ── 4B. 3-Tier Census Matrix Grid ── */}
+      {gridColumns.length === 0 ? (
         <div className="bg-white border border-border-farm rounded-2xl p-12 text-center shadow-sm">
           <ShieldAlert className="w-12 h-12 text-text-muted mx-auto mb-3" />
-          <h4 className="font-serif text-lg text-dark-green font-bold">No assigned pens found</h4>
+          <h4 className="font-serif text-lg text-dark-green font-bold">No assigned workers found for {selectedDate}</h4>
           <p className="text-xs text-text-muted mt-1 font-sans">
-            Staff can only see their assigned pens. Ask the Admin to assign pens to your profile.
-          </p>
-        </div>
-      ) : groupedPens.length === 0 ? (
-        <div className="bg-white border border-border-farm rounded-2xl p-12 text-center shadow-sm">
-          <Search className="w-12 h-12 text-text-muted mx-auto mb-3" />
-          <h4 className="font-serif text-lg text-dark-green font-bold">No matching pens</h4>
-          <p className="text-xs text-text-muted mt-1 font-sans">
-            No pens match "<strong>{searchTerm}</strong>". Try a different search term.
+            Please check the selected date or assign workers to pens in the Workers directory.
           </p>
         </div>
       ) : (
         <div className="bg-white border border-border-farm rounded-2xl shadow-sm overflow-hidden flex flex-col">
-          {/* Scrollable grid wrapper */}
-          <div className="overflow-auto max-h-[500px] scrollbar-thin">
+          <div className="overflow-auto max-h-[600px] scrollbar-thin">
             <table className="w-full border-collapse border-spacing-0 text-left">
               <thead>
-                {/* Block headers - Row 1 */}
-                <tr className="bg-dark-green text-white text-xs font-serif sticky top-0 z-10 shadow-[0_1px_0_0_rgba(0,0,0,0.1)]">
-                  <th className="p-3 border-r border-white/10 w-20 sticky left-0 bg-dark-green z-20">Slot</th>
-                  {groupedPens.map((g, idx) => {
-                    // Calculate colspan for this block
-                    const colSpan = g.pens.reduce((sum, pen) => sum + (pen.has_sides ? 2 : 1), 0);
-                    return (
-                      <th
-                        key={g.blockId}
-                        colSpan={colSpan}
-                        className={`p-3 text-center border-r border-white/10 uppercase tracking-widest font-black ${idx % 2 === 0 ? 'bg-dark-green' : 'bg-[#1e421a]'
-                          }`}
-                      >
-                        {g.blockName}
-                      </th>
-                    );
-                  })}
+                {/* ── Header Tier 1: Pen Name ── */}
+                <tr className="bg-dark-green text-white text-xs font-serif sticky top-0 z-30 shadow-[0_1px_0_0_rgba(0,0,0,0.15)]">
+                  <th 
+                    rowSpan={hasAnyTwoSections ? 3 : 2} 
+                    className="p-3 border-r border-white/20 w-20 sticky left-0 bg-dark-green z-40 text-center font-mono font-bold uppercase tracking-wider"
+                  >
+                    Slot No.
+                  </th>
+                  {penGroups.map((g, idx) => (
+                    <th
+                      key={g.penId}
+                      colSpan={g.totalCols}
+                      className={`p-3 text-center border-r border-white/20 uppercase tracking-widest font-black ${
+                        idx % 2 === 0 ? 'bg-dark-green' : 'bg-[#183a15]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-center gap-2">
+                        <span>🏠 {g.penName}</span>
+                        <span className="text-[10px] font-sans font-normal opacity-75">
+                          ({getPenTotal(g.penId).toLocaleString()} birds)
+                        </span>
+                      </div>
+                    </th>
+                  ))}
                 </tr>
 
-                {/* Pen headers - Row 2 */}
-                <tr className="bg-primary text-white text-[11px] font-sans sticky top-[39px] z-10 shadow-[0_1px_0_0_rgba(0,0,0,0.15)]">
-                  <th className="p-3 border-r border-white/10 sticky left-0 bg-primary z-20">No.</th>
-                  {groupedPens.map(g =>
-                    g.pens.map(pen => (
+                {/* ── Header Tier 2: Worker Name ── */}
+                <tr className="bg-primary text-white text-[11px] font-sans sticky top-[41px] z-20 shadow-[0_1px_0_0_rgba(0,0,0,0.15)]">
+                  {penGroups.map(g =>
+                    g.workers.map(w => (
                       <th
-                        key={pen.id}
-                        colSpan={pen.has_sides ? 2 : 1}
-                        className="p-2.5 text-center border-r border-white/10 font-bold tracking-tight"
-                        title={`${pen.resolvedName || pen.name} — Workers: ${pen.workerTeam}`}
+                        key={`${g.penId}-${w.workerId}`}
+                        colSpan={w.hasTwoSections ? 2 : 1}
+                        className="p-2.5 text-center border-r border-white/20 font-bold tracking-tight bg-primary"
                       >
-                        <div className="font-serif text-xs text-white">{pen.resolvedName || pen.name}</div>
-                        <div className="text-[9px] text-accent font-medium font-sans mt-0.5 truncate max-w-[180px] mx-auto opacity-95">
-                          👤 {pen.workerTeam}
+                        <div className="font-serif text-xs text-white truncate max-w-[140px] mx-auto">
+                          👤 {w.workerName}
                         </div>
                       </th>
                     ))
                   )}
                 </tr>
 
-                {/* Sub-column designations - Row 3 */}
-                <tr className="bg-light-green text-dark-green text-[10px] font-bold uppercase tracking-wider sticky top-[79px] z-10 border-b border-border-farm">
-                  <th className="p-2 border-r border-border-farm sticky left-0 bg-light-green z-20">Index</th>
-                  {gridColumns.map(col => (
-                    <th key={col.key} className="p-2 text-center border-r border-border-farm font-mono">
-                      {col.side === 'single' ? 'Single' : col.side}
-                    </th>
-                  ))}
-                </tr>
+                {/* ── Header Tier 3: Sub-section Label (a / b) ── */}
+                {hasAnyTwoSections && (
+                  <tr className="bg-light-green text-dark-green text-[10px] font-bold uppercase tracking-wider sticky top-[77px] z-20 border-b border-border-farm shadow-[0_1px_0_0_rgba(0,0,0,0.05)]">
+                    {gridColumns.map(col => (
+                      <th key={col.key} className="p-1.5 text-center border-r border-border-farm font-mono">
+                        {col.hasTwoSections ? `Sec ${col.section}` : 'Sec a'}
+                      </th>
+                    ))}
+                  </tr>
+                )}
               </thead>
 
-              {/* Matrix cells */}
+              {/* ── Matrix Rows (Slots 1 to maxSlots) ── */}
               <tbody className="divide-y divide-border-farm text-sm">
-                {/* Generates rows up to maxSlots */}
-                {Array.from({ length: maxSlots }, (_, i) => i + 1).map((slotNumber) => (
-                  <tr key={slotNumber} className="hover:bg-bg-farm/40 transition-colors">
-                    {/* Sticky row label */}
-                    <td className="p-2 font-mono font-bold text-center border-r border-border-farm sticky left-0 bg-white shadow-[1px_0_0_0_rgba(0,0,0,0.05)] w-20 z-10">
-                      {slotNumber}
-                    </td>
+                {Array.from({ length: maxSlots }, (_, i) => i + 1).map((slotNumber) => {
+                  const r = slotNumber - 1;
+                  return (
+                    <tr key={slotNumber} className="hover:bg-emerald-50/30 transition-colors">
+                      {/* Sticky left Slot Number */}
+                      <td className="p-2 font-mono font-bold text-center border-r border-border-farm sticky left-0 bg-white shadow-[1px_0_0_0_rgba(0,0,0,0.05)] w-20 z-10 text-dark-green select-none">
+                        {slotNumber}
+                      </td>
 
-                    {/* Column inputs */}
-                    {gridColumns.map((col) => {
-                      const isCellValid = slotNumber <= col.pen.slot_count;
-                      const cellKey = `${col.pen.id}-${col.side}-${slotNumber}`;
-                      const val = gridData[cellKey] ?? '';
+                      {/* Column Input Cells */}
+                      {gridColumns.map((col, c) => {
+                        const isCellValid = slotNumber <= col.slotCount;
+                        const cellKey = `${col.penId}-${col.workerId}-${col.section}-${slotNumber}`;
+                        const val = gridData[cellKey] ?? '';
 
-                      if (!isCellValid) {
+                        if (!isCellValid) {
+                          return (
+                            <td key={col.key} className="bg-bg-farm/40 border-r border-border-farm text-center text-[10px] text-text-muted/40 font-bold select-none py-1">
+                              —
+                            </td>
+                          );
+                        }
+
+                        const isSel = isCellSelected(r, c);
+                        const isAnc = isCellAnchor(r, c);
+
                         return (
-                          <td key={col.key} className="bg-bg-farm/50 border-r border-border-farm text-center text-[10px] text-text-muted/40 font-bold select-none py-1">
-                            N/A
+                          <td key={col.key} className="p-0 border-r border-border-farm align-middle relative">
+                            <input
+                              ref={el => registerRef(r, c, el)}
+                              data-row={r}
+                              data-col={c}
+                              type="number"
+                              step="1"
+                              min="0"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                              value={val}
+                              onFocus={e => e.target.select()}
+                              onChange={(e) => handleCellChange(col.penId, col.workerId, col.section, slotNumber, e.target.value)}
+                              onMouseDown={e => handleCellMouseDown(e, r, c)}
+                              onMouseEnter={() => handleCellMouseEnter(r, c)}
+                              onKeyDown={e => handleKeyDown(e, r, c)}
+                              style={{ minHeight: '40px', scrollMargin: '120px 0 0 90px' }}
+                              className={`w-full text-center py-2 px-1 font-mono text-sm border transition-colors select-none ${
+                                isSel
+                                  ? 'bg-[#e0f0ff] text-dark-green border-blue-400 font-bold'
+                                  : 'border-transparent bg-transparent text-text-primary'
+                              } ${
+                                isAnc ? 'ring-2 ring-primary ring-offset-1 z-10 bg-yellow-50/90' : ''
+                              } focus:bg-amber-50 focus:ring-1 focus:ring-primary focus:outline-none hover:bg-bg-farm/40`}
+                            />
                           </td>
                         );
-                      }
+                      })}
+                    </tr>
+                  );
+                })}
 
-                      return (
-                        <td key={col.key} className="p-0 border-r border-border-farm align-middle">
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            pattern="[0-9]*"
-                            value={val}
-                            onFocus={e => e.target.select()}
-                            onChange={(e) => handleCellChange(col.pen.id, col.side, slotNumber, e.target.value)}
-                            style={{ minHeight: '44px' }}
-                            className="w-full text-center py-2.5 px-1 font-mono text-sm border-0 bg-transparent text-text-primary focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none transition-colors"
-                          />
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-
-                {/* Subtotals Row */}
-                <tr className="bg-green-50/70 border-t-2 border-border-farm font-bold">
-                  <td className="p-3 font-serif font-black text-dark-green text-center sticky left-0 bg-green-50 z-10 border-r border-border-farm">
+                {/* ── Subtotals Row (Bottom of Grid - skipped in navigation) ── */}
+                <tr className="bg-green-50/80 border-t-2 border-border-farm font-bold sticky bottom-0 z-10 shadow-[0_-1px_0_0_rgba(0,0,0,0.1)] select-none">
+                  <td className="p-3 font-serif font-black text-dark-green text-center sticky left-0 bg-green-50 z-20 border-r border-border-farm">
                     Total
                   </td>
                   {gridColumns.map((col) => {
-                    const penTotal = getPenTotal(col.pen.id, col.side);
+                    const colTotal = getColumnTotal(col);
                     return (
-                      <td key={col.key} className="p-3 text-center border-r border-border-farm font-mono text-dark-green font-black">
-                        {penTotal.toLocaleString()}
+                      <td key={col.key} className="p-2.5 text-center border-r border-border-farm font-mono text-dark-green font-black">
+                        {colTotal.toLocaleString()}
                       </td>
                     );
                   })}
@@ -567,10 +619,29 @@ export default function CensusMatrix() {
               </tbody>
             </table>
           </div>
+
+          {/* Selection Status Bar (Part 4) */}
+          {selectionStats && selectionStats.count > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 bg-emerald-50 border-t border-emerald-200 text-xs font-mono text-dark-green">
+              <div className="flex items-center gap-3">
+                <span className="font-bold flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-primary inline-block"></span>
+                  Selected: {selectionStats.count} cell{selectionStats.count !== 1 ? 's' : ''}
+                </span>
+                <span>•</span>
+                <span>Sum: <strong className="font-bold">{selectionStats.sum.toLocaleString()}</strong></span>
+                <span>•</span>
+                <span>Avg: <strong className="font-bold">{selectionStats.avg.toLocaleString()}</strong></span>
+              </div>
+              <div className="flex items-center gap-2 text-[10px] font-sans text-text-muted">
+                <span>Tip: Press <kbd className="px-1 py-0.5 bg-white border border-border-farm rounded font-mono font-bold">Ctrl+Enter</kbd> to fill selection, <kbd className="px-1 py-0.5 bg-white border border-border-farm rounded font-mono font-bold">Esc</kbd> to clear</span>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
-      {/* 2. General Livestock Census Module */}
+      {/* ── 2. General Livestock Census Module ── */}
       <div className="bg-white border border-border-farm rounded-2xl p-5 shadow-sm space-y-4">
         <div className="flex items-center justify-between border-b border-border-farm pb-3">
           <h3 className="font-serif text-dark-green font-bold text-base flex items-center gap-1.5">
@@ -601,7 +672,6 @@ export default function CensusMatrix() {
                     <span className="text-base leading-none mt-0.5">⚠️</span>
                     <span>
                       <strong>{nanRows.length} corrupted row{nanRows.length !== 1 ? 's' : ''} hidden</strong> — these rows have invalid "nan" category values.
-                      To remove them permanently, go to your <strong>Supabase Dashboard → Table Editor → general_census</strong> and delete rows where <code>category = 'nan'</code>.
                     </span>
                   </div>
                 )}
@@ -649,7 +719,7 @@ export default function CensusMatrix() {
         </div>
       </div>
 
-      {/* MODALS */}
+      {/* ── MODALS ── */}
       {/* 1. Add Pen Modal */}
       {showAddPen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
@@ -663,7 +733,26 @@ export default function CensusMatrix() {
                 ✕
               </button>
             </div>
-            <form onSubmit={handleAddPenSubmit} className="p-6 space-y-4 font-sans text-xs">
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              if (!newPenName || !newPenBlockId) return;
+              try {
+                const order = (data.pens || []).length + 1;
+                await insertRecord('pens', {
+                  name: newPenName,
+                  pen_block_id: newPenBlockId,
+                  slot_count: Number(newPenSlotCount),
+                  generation: newPenGeneration || '',
+                  display_order: order,
+                  is_active: true
+                });
+                setShowAddPen(false);
+                setNewPenName('');
+                setNewPenGeneration('');
+              } catch (err) {
+                console.error('Failed to add pen:', err);
+              }
+            }} className="p-6 space-y-4 font-sans text-xs">
               <div>
                 <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
                   Pen Name
@@ -673,7 +762,7 @@ export default function CensusMatrix() {
                   required
                   value={newPenName}
                   onChange={(e) => setNewPenName(e.target.value)}
-                  placeholder="e.g. Muslimat Pen 2"
+                  placeholder="e.g. Pen D"
                   className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent"
                 />
               </div>
@@ -698,24 +787,6 @@ export default function CensusMatrix() {
 
                 <div>
                   <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
-                    Assign Worker Staff
-                  </label>
-                  <select
-                    value={newPenWorkerId}
-                    onChange={(e) => setNewPenWorkerId(e.target.value)}
-                    className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent font-semibold text-text-primary"
-                  >
-                    <option value="">Unassigned</option>
-                    {(data.workers || []).filter(w => w.role === 'staff').map(w => (
-                      <option key={w.id} value={w.id}>{w.name}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
                     Slot Size (Cage Rows)
                   </label>
                   <input
@@ -728,32 +799,6 @@ export default function CensusMatrix() {
                     className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent"
                   />
                 </div>
-
-                <div>
-                  <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
-                    Bird Generation/Batch
-                  </label>
-                  <input
-                    type="text"
-                    value={newPenGeneration}
-                    onChange={(e) => setNewPenGeneration(e.target.value)}
-                    placeholder="e.g. Batch 2026A"
-                    className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent"
-                  />
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 pt-2">
-                <input
-                  type="checkbox"
-                  id="hasSides"
-                  checked={newPenHasSides}
-                  onChange={(e) => setNewPenHasSides(e.target.checked)}
-                  className="w-4 h-4 rounded text-primary focus:ring-primary"
-                />
-                <label htmlFor="hasSides" className="text-text-primary font-bold select-none cursor-pointer">
-                  Divided into Left & Right sides
-                </label>
               </div>
 
               <div className="flex gap-3 justify-end pt-4 border-t border-border-farm">
@@ -789,7 +834,35 @@ export default function CensusMatrix() {
                 ✕
               </button>
             </div>
-            <form onSubmit={handleAddLivestockSubmit} className="p-6 space-y-4 font-sans text-xs">
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              if (!lsBreed) return;
+              if (!lsCategory || lsCategory === 'nan' || !lsBreed || lsBreed === 'nan') {
+                alert('Please enter valid Category and Type/Breed values before saving.');
+                return;
+              }
+              try {
+                await insertRecord('general_census', {
+                  category: lsCategory,
+                  type_breed: lsBreed,
+                  male: Number(lsMale),
+                  female: Number(lsFemale),
+                  unsexed: Number(lsUnsexed),
+                  date: selectedDate,
+                  vendor: lsVendor || '',
+                  remarks: lsRemarks || ''
+                });
+                setShowAddLivestock(false);
+                setLsBreed('');
+                setLsMale(0);
+                setLsFemale(0);
+                setLsUnsexed(0);
+                setLsVendor('');
+                setLsRemarks('');
+              } catch (err) {
+                console.error('Failed to add livestock:', err);
+              }
+            }} className="p-6 space-y-4 font-sans text-xs">
               <div>
                 <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
                   Category
@@ -911,6 +984,12 @@ export default function CensusMatrix() {
           </div>
         </div>
       )}
+
+      {/* Grid Keyboard Shortcuts Cheat Sheet Modal */}
+      <GridShortcutsModal
+        isOpen={showShortcutsModal}
+        onClose={() => setShowShortcutsModal(false)}
+      />
     </div>
   );
 }

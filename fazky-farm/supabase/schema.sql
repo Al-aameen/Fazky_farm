@@ -42,16 +42,54 @@ CREATE TABLE IF NOT EXISTS pens (
   UNIQUE(pen_block_id, name)
 );
 
+-- 3B. Pen Name History Table
+CREATE TABLE IF NOT EXISTS pen_name_history (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  pen_id        UUID NOT NULL REFERENCES pens(id) ON DELETE CASCADE,
+  display_name  TEXT NOT NULL,
+  start_date    DATE NOT NULL,
+  end_date      DATE,
+  is_primary    BOOLEAN DEFAULT TRUE,
+  notes         TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT pnh_end_after_start CHECK (end_date IS NULL OR end_date > start_date)
+);
+
+-- 3C. Pen Worker History Table
+CREATE TABLE IF NOT EXISTS pen_worker_history (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  worker_id        UUID NOT NULL REFERENCES workers(id) ON DELETE RESTRICT,
+  pen_id           UUID NOT NULL REFERENCES pens(id) ON DELETE RESTRICT,
+  start_date       DATE NOT NULL,
+  end_date         DATE,
+  has_two_sections BOOLEAN NOT NULL DEFAULT FALSE,
+  notes            TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT pwh_end_after_start CHECK (end_date IS NULL OR end_date > start_date)
+);
+
+-- 3D. Worker Name Aliases Table
+CREATE TABLE IF NOT EXISTS worker_name_aliases (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  worker_id   UUID NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+  alias       TEXT NOT NULL UNIQUE,
+  source      TEXT DEFAULT 'notebook',
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- 4. Census Counts Table
 CREATE TABLE IF NOT EXISTS census_counts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   pen_id UUID NOT NULL REFERENCES pens(id) ON DELETE CASCADE,
-  side TEXT NOT NULL CHECK (side IN ('left', 'right', 'single')),
+  worker_id UUID REFERENCES workers(id) ON DELETE SET NULL,
+  side TEXT NOT NULL DEFAULT 'a', -- Section 'a' or 'b'
   slot_number INT NOT NULL,
   bird_count INT NOT NULL DEFAULT 0 CHECK (bird_count >= 0),
-  date DATE NOT NULL,
+  date DATE NOT NULL,              -- Period this count represents
+  count_date DATE,                 -- Date physical count was actually performed
+  period_label TEXT,               -- E.g. "December 2025 Closing"
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(pen_id, side, slot_number, date)
+  CONSTRAINT census_unique_slot UNIQUE (pen_id, worker_id, side, slot_number, date)
 );
 
 -- 5. General Census Table
@@ -303,6 +341,9 @@ REVOKE EXECUTE ON FUNCTION public.my_worker_id() FROM anon;
 ALTER TABLE workers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pen_blocks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pens ENABLE ROW LEVEL SECURITY;
+ALTER TABLE pen_name_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE pen_worker_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE worker_name_aliases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE census_counts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE general_census ENABLE ROW LEVEL SECURITY;
 ALTER TABLE production_log ENABLE ROW LEVEL SECURITY;
@@ -330,6 +371,9 @@ ALTER TABLE worker_permissions ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.workers            FROM anon, authenticated;
 REVOKE ALL ON TABLE public.pen_blocks         FROM anon, authenticated;
 REVOKE ALL ON TABLE public.pens               FROM anon, authenticated;
+REVOKE ALL ON TABLE public.pen_name_history   FROM anon, authenticated;
+REVOKE ALL ON TABLE public.pen_worker_history FROM anon, authenticated;
+REVOKE ALL ON TABLE public.worker_name_aliases FROM anon, authenticated;
 REVOKE ALL ON TABLE public.census_counts      FROM anon, authenticated;
 REVOKE ALL ON TABLE public.general_census     FROM anon, authenticated;
 REVOKE ALL ON TABLE public.production_log     FROM anon, authenticated;
@@ -352,6 +396,9 @@ REVOKE ALL ON TABLE public.worker_permissions FROM anon, authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.workers            TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.pen_blocks         TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.pens               TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.pen_name_history   TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.pen_worker_history TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_name_aliases TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.census_counts      TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.general_census     TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.production_log     TO authenticated;
@@ -369,46 +416,6 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.grower_daily_logs  TO authe
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.loan_requests      TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.general_livestock_detailed TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_permissions TO authenticated;
-
--- This is a private farm management app — no unauthenticated (anon) access on any table.
--- Step 1: Revoke all default grants from anon and authenticated.
--- Step 2: Grant back only what the app needs, to authenticated only.
--- service_role is NOT revoked here — it bypasses RLS and is only used server-side.
-REVOKE ALL ON TABLE public.workers            FROM anon, authenticated;
-REVOKE ALL ON TABLE public.pen_blocks         FROM anon, authenticated;
-REVOKE ALL ON TABLE public.pens               FROM anon, authenticated;
-REVOKE ALL ON TABLE public.census_counts      FROM anon, authenticated;
-REVOKE ALL ON TABLE public.general_census     FROM anon, authenticated;
-REVOKE ALL ON TABLE public.production_log     FROM anon, authenticated;
-REVOKE ALL ON TABLE public.sales_log          FROM anon, authenticated;
-REVOKE ALL ON TABLE public.egg_price_settings FROM anon, authenticated;
-REVOKE ALL ON TABLE public.expenses_log       FROM anon, authenticated;
-REVOKE ALL ON TABLE public.maize_records      FROM anon, authenticated;
-REVOKE ALL ON TABLE public.feed_production    FROM anon, authenticated;
-REVOKE ALL ON TABLE public.loans              FROM anon, authenticated;
-REVOKE ALL ON TABLE public.loan_repayments    FROM anon, authenticated;
-REVOKE ALL ON TABLE public.off_pays           FROM anon, authenticated;
-REVOKE ALL ON TABLE public.feed_inventory     FROM anon, authenticated;
-REVOKE ALL ON TABLE public.feed_inventory_log FROM anon, authenticated;
-
--- Grant exactly what authenticated users need (RLS policies further restrict which rows).
--- anon gets nothing — the app requires login for everything.
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.workers            TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.pen_blocks         TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.pens               TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.census_counts      TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.general_census     TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.production_log     TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sales_log          TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.egg_price_settings TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.expenses_log       TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.maize_records      TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.feed_production    TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.loans              TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.loan_repayments    TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.off_pays           TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.feed_inventory     TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.feed_inventory_log TO authenticated;
 
 -- RLS Policies
 -- (DROP IF EXISTS first — makes this script safe to re-run on an existing database)
@@ -492,6 +499,42 @@ CREATE POLICY pens_all_admin ON pens
 FOR ALL TO authenticated
 USING (
   my_role() = 'admin'
+);
+
+-- Pen Name History policies
+DROP POLICY IF EXISTS pen_name_history_select ON pen_name_history;
+DROP POLICY IF EXISTS pen_name_history_modify ON pen_name_history;
+CREATE POLICY pen_name_history_select ON pen_name_history
+FOR SELECT TO authenticated
+USING (true);
+CREATE POLICY pen_name_history_modify ON pen_name_history
+FOR ALL TO authenticated
+USING (
+  my_role() IN ('admin', 'manager')
+);
+
+-- Pen Worker History policies
+DROP POLICY IF EXISTS pen_worker_history_select ON pen_worker_history;
+DROP POLICY IF EXISTS pen_worker_history_modify ON pen_worker_history;
+CREATE POLICY pen_worker_history_select ON pen_worker_history
+FOR SELECT TO authenticated
+USING (true);
+CREATE POLICY pen_worker_history_modify ON pen_worker_history
+FOR ALL TO authenticated
+USING (
+  my_role() IN ('admin', 'manager')
+);
+
+-- Worker Name Aliases policies
+DROP POLICY IF EXISTS worker_name_aliases_select ON worker_name_aliases;
+DROP POLICY IF EXISTS worker_name_aliases_modify ON worker_name_aliases;
+CREATE POLICY worker_name_aliases_select ON worker_name_aliases
+FOR SELECT TO authenticated
+USING (true);
+CREATE POLICY worker_name_aliases_modify ON worker_name_aliases
+FOR ALL TO authenticated
+USING (
+  my_role() IN ('admin', 'manager')
 );
 
 -- Census Counts policies
@@ -1072,59 +1115,29 @@ ALTER TABLE public.workers ADD COLUMN IF NOT EXISTS avatar TEXT;
 ALTER TABLE public.workers ADD COLUMN IF NOT EXISTS delete_pin TEXT;
 
 -- ─── Part 8: Default Reference Data (Idempotent) ─────────────────────────────
--- Ensure standard Pen Blocks exist
+-- Ensure standard Pen Block exists
 INSERT INTO public.pen_blocks (name, display_order)
-VALUES 
-  ('Pen Block A', 1),
-  ('Pen Block B', 2),
-  ('Pen Block C', 3),
-  ('Pen Block D', 4)
+VALUES ('Farm Pens', 1)
 ON CONFLICT (name) DO NOTHING;
 
--- Ensure standard Pens exist under each Pen Block
+-- Ensure standard 4 Pens exist under 'Farm Pens' ONLY when pens table is empty
 DO $$
 DECLARE
-  v_pb_a UUID;
-  v_pb_b UUID;
-  v_pb_c UUID;
-  v_pb_d UUID;
+  v_farm_pens_block UUID;
 BEGIN
-  SELECT id INTO v_pb_a FROM public.pen_blocks WHERE name = 'Pen Block A' LIMIT 1;
-  SELECT id INTO v_pb_b FROM public.pen_blocks WHERE name = 'Pen Block B' LIMIT 1;
-  SELECT id INTO v_pb_c FROM public.pen_blocks WHERE name = 'Pen Block C' LIMIT 1;
-  SELECT id INTO v_pb_d FROM public.pen_blocks WHERE name = 'Pen Block D' LIMIT 1;
+  -- Only seed default pens if the pens table is completely empty
+  IF NOT EXISTS (SELECT 1 FROM public.pens LIMIT 1) THEN
+    SELECT id INTO v_farm_pens_block FROM public.pen_blocks WHERE name = 'Farm Pens' LIMIT 1;
 
-  IF v_pb_a IS NOT NULL THEN
-    INSERT INTO public.pens (pen_block_id, name, has_sides, slot_count, generation, display_order, is_active)
-    VALUES 
-      (v_pb_a, 'Muslimat Pen', false, 15, 'Batch 1', 1, true),
-      (v_pb_a, 'MM Pen', false, 15, 'Batch 1', 2, true),
-      (v_pb_a, 'Baba Farida Pen', false, 15, 'Batch 2', 3, true),
-      (v_pb_a, 'Iya Opeyemi Pen', false, 15, 'Batch 2', 4, true)
-    ON CONFLICT (pen_block_id, name) DO NOTHING;
-  END IF;
-
-  IF v_pb_b IS NOT NULL THEN
-    INSERT INTO public.pens (pen_block_id, name, has_sides, slot_count, generation, display_order, is_active)
-    VALUES 
-      (v_pb_b, 'Iya Arishe Pen', true, 14, 'Batch 3', 1, true),
-      (v_pb_b, 'Iya Farida Pen', true, 13, 'Batch 3', 2, true)
-    ON CONFLICT (pen_block_id, name) DO NOTHING;
-  END IF;
-
-  IF v_pb_c IS NOT NULL THEN
-    INSERT INTO public.pens (pen_block_id, name, has_sides, slot_count, generation, display_order, is_active)
-    VALUES 
-      (v_pb_c, 'Iya Zainab / Arisha Pen', true, 14, 'Batch 4', 1, true),
-      (v_pb_c, 'Alfa Taye Pen', true, 13, 'Batch 4', 2, true)
-    ON CONFLICT (pen_block_id, name) DO NOTHING;
-  END IF;
-
-  IF v_pb_d IS NOT NULL THEN
-    INSERT INTO public.pens (pen_block_id, name, has_sides, slot_count, generation, display_order, is_active)
-    VALUES 
-      (v_pb_d, 'Amos Pen', false, 10, 'Batch 5', 1, true)
-    ON CONFLICT (pen_block_id, name) DO NOTHING;
+    IF v_farm_pens_block IS NOT NULL THEN
+      INSERT INTO public.pens (pen_block_id, name, has_sides, slot_count, generation, display_order, is_active)
+      VALUES 
+        (v_farm_pens_block, 'Retired - Original Big Pen', false, 15, 'Historical', 1, false),
+        (v_farm_pens_block, 'Pen A', true, 15, 'Batch 1-4', 2, true),
+        (v_farm_pens_block, 'Pen B', true, 15, 'Batch 1-4', 3, true),
+        (v_farm_pens_block, 'Pen C', true, 15, 'Batch 1-4', 4, true)
+      ON CONFLICT (pen_block_id, name) DO NOTHING;
+    END IF;
   END IF;
 END $$;
 

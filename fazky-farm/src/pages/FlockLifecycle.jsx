@@ -95,6 +95,50 @@ function GridCell({ value, onChange, type = 'number', placeholder = '0', readOnl
   );
 }
 
+// ─── 4 Verified Historical Batches (ISA Brown) ───────────────────────────────
+export const HISTORICAL_BATCHES = [
+  {
+    batch_name: 'Batch 1 (Nov 2023)',
+    arrival_date: '2023-11-23',
+    expected_lay_date: '2024-03-28',
+    quantity_arrived: 3060,
+    cost_per_bird: 400,
+    breed: 'ISA Brown',
+    status: 'laying',
+    notes: 'Remaining as of 06-Jan-2026: 2,382 birds'
+  },
+  {
+    batch_name: 'Batch 2 (Aug 2024)',
+    arrival_date: '2024-08-22',
+    expected_lay_date: '2024-12-31',
+    quantity_arrived: 3040,
+    cost_per_bird: 700,
+    breed: 'ISA Brown',
+    status: 'laying',
+    notes: 'Remaining as of 06-Jan-2026: 2,556 birds'
+  },
+  {
+    batch_name: 'Batch 3 (May 2025)',
+    arrival_date: '2025-05-18',
+    expected_lay_date: '2025-09-21',
+    quantity_arrived: 3060,
+    cost_per_bird: 1300,
+    breed: 'ISA Brown',
+    status: 'laying',
+    notes: 'Remaining as of 06-Jan-2026: 2,377 birds'
+  },
+  {
+    batch_name: 'Batch 4 (Sep 2025)',
+    arrival_date: '2025-09-15',
+    expected_lay_date: '2026-01-16',
+    quantity_arrived: 3060,
+    cost_per_bird: 1500,
+    breed: 'ISA Brown',
+    status: 'laying',
+    notes: 'Remaining as of 06-Jan-2026: 2,996 birds'
+  }
+];
+
 // ─── Tab list ─────────────────────────────────────────────────────────────────
 const TABS = [
   { id: 'batches', label: 'Batch Registry',           icon: ClipboardList },
@@ -390,7 +434,7 @@ export default function FlockLifecycle() {
       {activeTab === 'batches' && (
         <div className="bg-white rounded-2xl border border-border-farm shadow-sm overflow-hidden">
           {/* Tab-level action bar */}
-          <div className="flex items-center justify-between p-4 border-b border-border-farm">
+          <div className="flex flex-wrap items-center justify-between gap-3 p-4 border-b border-border-farm">
             <h3 className="font-serif font-bold text-dark-green text-sm">
               All Batches
               <span className="ml-2 text-[10px] font-sans font-bold text-text-muted bg-bg-farm px-2 py-0.5 rounded-full border border-border-farm">
@@ -398,18 +442,52 @@ export default function FlockLifecycle() {
               </span>
             </h3>
             {canEdit && (
-              <button onClick={() => setShowBatchModal(true)}
-                className="flex items-center gap-1 text-primary hover:text-emerald-700 text-xs font-bold transition-colors">
-                <Plus className="w-3.5 h-3.5" /> New Batch
-              </button>
+              <div className="flex items-center gap-2">
+                {batches.length < 4 && (
+                  <button
+                    onClick={async () => {
+                      if (!confirm('Populate the 4 verified historical ISA Brown batches (Nov 2023, Aug 2024, May 2025, Sep 2025)?')) return;
+                      for (const hb of HISTORICAL_BATCHES) {
+                        const exists = batches.find(b => b.batch_name === hb.batch_name);
+                        if (!exists) {
+                          await insertRecord('batches', hb);
+                        }
+                      }
+                    }}
+                    className="flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-dark-green border border-emerald-300 font-bold px-3 py-1.5 rounded-xl text-xs transition-all"
+                  >
+                    <span>📜</span>
+                    <span>Seed 4 Historical Batches</span>
+                  </button>
+                )}
+                <button onClick={() => setShowBatchModal(true)}
+                  className="flex items-center gap-1 bg-primary hover:bg-dark-green text-white font-bold px-3 py-1.5 rounded-xl text-xs shadow-sm transition-colors">
+                  <Plus className="w-3.5 h-3.5" /> New Batch
+                </button>
+              </div>
             )}
           </div>
 
           {batches.length === 0 ? (
-            <div className="p-12 text-center space-y-2">
+            <div className="p-12 text-center space-y-4">
               <Egg className="w-10 h-10 text-border-farm mx-auto" />
-              <p className="text-sm font-bold text-text-muted">No batches registered yet</p>
-              <p className="text-xs text-text-muted">Click <strong>New Batch</strong> to register the first chick arrival.</p>
+              <div>
+                <p className="text-sm font-bold text-text-muted">No batches registered yet</p>
+                <p className="text-xs text-text-muted mt-0.5">Click below to auto-populate the 4 verified historical batches or register a new one.</p>
+              </div>
+              {canEdit && (
+                <button
+                  onClick={async () => {
+                    for (const hb of HISTORICAL_BATCHES) {
+                      await insertRecord('batches', hb);
+                    }
+                  }}
+                  className="inline-flex items-center gap-2 bg-primary hover:bg-dark-green text-white font-bold px-4 py-2 rounded-xl text-xs shadow-md transition-all"
+                >
+                  <span>📜</span>
+                  <span>Populate 4 Historical Batches (ISA Brown)</span>
+                </button>
+              )}
             </div>
           ) : (
             <div className="overflow-x-auto">

@@ -504,9 +504,9 @@ export default function Workers() {
       {/* ─── MODAL 2: EDIT WORKER ─── */}
       {showEditModal && editingWorker && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
-          <div className="bg-white rounded-2xl border border-border-farm shadow-2xl max-w-[380px] w-full overflow-hidden animate-scale-in">
-            <div className="bg-dark-green p-4 text-white font-serif font-bold text-base flex justify-between items-center">
-              <span>Edit Worker Profile</span>
+          <div className="bg-white rounded-2xl border border-border-farm shadow-2xl max-w-[500px] w-full overflow-hidden animate-scale-in max-h-[90vh] flex flex-col">
+            <div className="bg-dark-green p-4 text-white font-serif font-bold text-base flex justify-between items-center shrink-0">
+              <span>Edit Worker Profile & Assignments</span>
               <button 
                 onClick={() => {
                   setShowEditModal(false);
@@ -517,92 +517,309 @@ export default function Workers() {
                 ✕
               </button>
             </div>
-            <form onSubmit={handleEditSubmit} className="p-6 space-y-4 font-sans text-xs">
-              <div>
-                <div className="text-[9px] text-text-muted font-bold uppercase tracking-wider mb-1">Worker Email</div>
-                <div className="bg-bg-farm border border-border-farm rounded-lg px-3 py-2 font-mono text-text-muted text-xs">
-                  {editingWorker.email}
+            
+            <div className="p-6 overflow-y-auto space-y-5 font-sans text-xs scrollbar-thin">
+              {/* Profile Details Form */}
+              <form onSubmit={handleEditSubmit} className="space-y-4">
+                <div>
+                  <div className="text-[9px] text-text-muted font-bold uppercase tracking-wider mb-1">Worker Email</div>
+                  <div className="bg-bg-farm border border-border-farm rounded-lg px-3 py-2 font-mono text-text-muted text-xs">
+                    {editingWorker.email}
+                  </div>
                 </div>
-              </div>
 
-              <div>
-                <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
-                  Worker Name
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
-                    System Role
-                  </label>
-                  <select
-                    value={editRole}
-                    onChange={(e) => setEditRole(e.target.value)}
-                    className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none font-bold text-text-primary"
-                  >
-                    <option value="staff">Staff (Worker)</option>
-                    <option value="manager">Manager</option>
-                    <option value="admin">Administrator</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
-                    Base Salary (₦)
+                    Worker Name
                   </label>
                   <input
-                    type="number"
+                    type="text"
                     required
-                    min="0"
-                    value={editSalary}
-                    onChange={(e) => setEditSalary(e.target.value)}
-                    className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none font-semibold font-mono"
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none"
                   />
                 </div>
-              </div>
 
-              <div>
-                <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
-                  Status
-                </label>
-                <select
-                  value={editStatus}
-                  onChange={(e) => setEditStatus(e.target.value)}
-                  className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none font-bold text-text-primary"
-                >
-                  <option value="active">Active</option>
-                  <option value="invited">Invited</option>
-                  <option value="inactive">Inactive (Deactivated)</option>
-                </select>
-              </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                      System Role
+                    </label>
+                    <select
+                      value={editRole}
+                      onChange={(e) => setEditRole(e.target.value)}
+                      className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none font-bold text-text-primary"
+                    >
+                      <option value="staff">Staff (Worker)</option>
+                      <option value="manager">Manager</option>
+                      <option value="admin">Administrator</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                      Base Salary (₦)
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min="0"
+                      value={editSalary}
+                      onChange={(e) => setEditSalary(e.target.value)}
+                      className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none font-semibold font-mono"
+                    />
+                  </div>
+                </div>
 
-              <div className="flex gap-3 justify-end pt-4 border-t border-border-farm">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowEditModal(false);
-                    setEditingWorker(null);
-                  }}
-                  className="px-4 py-2 border border-border-farm hover:bg-bg-farm rounded-lg font-bold"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={actionLoading}
-                  className="px-4 py-2 bg-primary hover:bg-dark-green text-white rounded-lg font-bold shadow-sm disabled:opacity-50"
-                >
-                  {actionLoading ? 'Saving...' : 'Save Changes'}
-                </button>
+                <div>
+                  <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                    Account Status
+                  </label>
+                  <select
+                    value={editStatus}
+                    onChange={(e) => setEditStatus(e.target.value)}
+                    className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none font-bold text-text-primary"
+                  >
+                    <option value="active">Active</option>
+                    <option value="invited">Invited</option>
+                    <option value="inactive">Inactive (Departed / Deactivated)</option>
+                  </select>
+                </div>
+
+                <div className="flex justify-end pt-2">
+                  <button
+                    type="submit"
+                    disabled={actionLoading}
+                    className="px-4 py-2 bg-primary hover:bg-dark-green text-white rounded-lg font-bold shadow-sm disabled:opacity-50 text-xs"
+                  >
+                    {actionLoading ? 'Updating...' : 'Save Profile Changes'}
+                  </button>
+                </div>
+              </form>
+
+              {/* ── 5. Pen Assignments & Counting Sections ── */}
+              <div className="pt-4 border-t border-border-farm space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-serif text-dark-green font-bold text-sm flex items-center gap-1.5">
+                    <span>🏠</span>
+                    <span>Pen Assignments & Counting Sections</span>
+                  </h4>
+                </div>
+
+                {/* 5A. Active Assignments List */}
+                {(() => {
+                  const todayStr = new Date().toISOString().split('T')[0];
+                  const activeAssignments = (data.pen_worker_history || []).filter(a =>
+                    a.worker_id === editingWorker.id &&
+                    a.start_date <= todayStr &&
+                    (!a.end_date || a.end_date >= todayStr)
+                  );
+                  const nameHistory = data.pen_name_history || [];
+                  const pensLookup = Object.fromEntries((data.pens || []).map(p => [p.id, p]));
+
+                  if (activeAssignments.length === 0) {
+                    return (
+                      <div className="bg-bg-farm p-3 rounded-xl border border-border-farm text-center text-text-muted text-xs">
+                        No active pen assignments for this worker. Use the form below to assign a pen.
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="space-y-2">
+                      {activeAssignments.map(a => {
+                        const pen = pensLookup[a.pen_id];
+                        const penDisplayName = resolvePenDisplayName(a.pen_id, todayStr, nameHistory, pen?.name || 'Pen');
+                        const isTwo = !!a.has_two_sections;
+
+                        return (
+                          <div key={a.id} className="bg-bg-farm border border-border-farm rounded-xl p-2.5 flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-dark-green text-xs">🏠 {penDisplayName}</span>
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                                isTwo 
+                                  ? 'bg-amber-50 text-amber-800 border-amber-300' 
+                                  : 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                              }`}>
+                                {isTwo ? '2 sections (a/b)' : 'Single section'}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-1.5">
+                              {/* Toggle sections button */}
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  if (!confirm(`Switch ${editingWorker.name}'s assignment in ${penDisplayName} to ${isTwo ? 'Single section' : '2 sections (a/b)'}?`)) return;
+                                  try {
+                                    const yDate = new Date();
+                                    yDate.setDate(yDate.getDate() - 1);
+                                    const yesterdayStr = yDate.toISOString().split('T')[0];
+
+                                    // Close current
+                                    await updateRecord('pen_worker_history', {
+                                      id: a.id,
+                                      end_date: yesterdayStr
+                                    });
+
+                                    // Insert new
+                                    await insertRecord('pen_worker_history', {
+                                      worker_id: editingWorker.id,
+                                      pen_id: a.pen_id,
+                                      start_date: todayStr,
+                                      end_date: null,
+                                      has_two_sections: !isTwo,
+                                      notes: `Switched to ${!isTwo ? '2 sections (a/b)' : 'single section'}`
+                                    });
+
+                                    await refresh();
+                                  } catch (err) {
+                                    alert('Failed to update sections: ' + err.message);
+                                  }
+                                }}
+                                className="text-[10px] text-primary hover:underline font-bold px-2 py-1 bg-white border border-border-farm rounded-lg"
+                                title="Toggle between single and 2 counting sections"
+                              >
+                                Switch to {isTwo ? '1 sec' : '2 sec (a/b)'}
+                              </button>
+
+                              {/* Remove button */}
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  if (!confirm(`Remove ${editingWorker.name} from ${penDisplayName}?`)) return;
+                                  try {
+                                    const yDate = new Date();
+                                    yDate.setDate(yDate.getDate() - 1);
+                                    const yesterdayStr = yDate.toISOString().split('T')[0];
+
+                                    await updateRecord('pen_worker_history', {
+                                      id: a.id,
+                                      end_date: yesterdayStr
+                                    });
+
+                                    await refresh();
+                                  } catch (err) {
+                                    alert('Failed to remove assignment: ' + err.message);
+                                  }
+                                }}
+                                className="text-[10px] text-red-600 hover:bg-red-50 font-bold px-2 py-1 border border-red-200 rounded-lg transition-colors"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+
+                {/* 5B. Form to Add New Assignment */}
+                <div className="bg-bg-farm/60 border border-border-farm rounded-xl p-3 space-y-3">
+                  <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider">
+                    + Assign to Another Pen
+                  </div>
+                  
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[9px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                        Select Pen
+                      </label>
+                      <select
+                        id="newAssignPenSelect"
+                        className="w-full bg-white border border-border-farm rounded-lg px-2.5 py-1.5 text-xs font-semibold text-text-primary focus:outline-none"
+                      >
+                        <option value="">Select Pen...</option>
+                        {(data.pens || [])
+                          .filter(p => p.is_active !== false && !p.name?.toLowerCase().includes('retired'))
+                          .map(p => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[9px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                        Effective From Date
+                      </label>
+                      <input
+                        type="date"
+                        id="newAssignDateInput"
+                        defaultValue={new Date().toISOString().split('T')[0]}
+                        className="w-full bg-white border border-border-farm rounded-lg px-2.5 py-1.5 text-xs font-semibold text-text-primary focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        id="newAssignTwoSecCheckbox"
+                        className="w-3.5 h-3.5 rounded text-primary focus:ring-primary"
+                      />
+                      <span className="text-xs font-medium text-text-primary">
+                        This worker counts 2 sections (a and b)
+                      </span>
+                    </label>
+
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const penSelect = document.getElementById('newAssignPenSelect');
+                        const dateInput = document.getElementById('newAssignDateInput');
+                        const twoSecCheck = document.getElementById('newAssignTwoSecCheckbox');
+
+                        const penId = penSelect?.value;
+                        const effDate = dateInput?.value || new Date().toISOString().split('T')[0];
+                        const hasTwo = !!twoSecCheck?.checked;
+
+                        if (!penId) {
+                          alert('Please select a pen to assign.');
+                          return;
+                        }
+
+                        try {
+                          await insertRecord('pen_worker_history', {
+                            worker_id: editingWorker.id,
+                            pen_id: penId,
+                            start_date: effDate,
+                            end_date: null,
+                            has_two_sections: hasTwo,
+                            notes: `Assigned via Workers Directory on ${effDate}`
+                          });
+
+                          if (penSelect) penSelect.value = '';
+                          if (twoSecCheck) twoSecCheck.checked = false;
+                          await refresh();
+                        } catch (err) {
+                          alert('Failed to assign pen: ' + err.message);
+                        }
+                      }}
+                      className="px-3 py-1.5 bg-primary hover:bg-dark-green text-white font-bold text-xs rounded-lg shadow-sm transition-all"
+                    >
+                      + Assign Pen
+                    </button>
+                  </div>
+                </div>
               </div>
-            </form>
+            </div>
+
+            <div className="p-4 bg-bg-farm border-t border-border-farm flex justify-end shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowEditModal(false);
+                  setEditingWorker(null);
+                }}
+                className="px-4 py-2 bg-white border border-border-farm hover:bg-bg-farm rounded-lg font-bold text-xs"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}
