@@ -26,7 +26,7 @@ import {
 import { exportToCSV, exportToExcel, parseImportFile, downloadCSVTemplate } from '../lib/csvExportImport';
 
 export default function Settings() {
-  const { data, insertRecord, updateRecord, deleteRecord, bulkInsertRecords, refresh, isOnline, ensureTableLoaded } = useData();
+  const { data, insertRecord, updateRecord, deleteRecord, bulkInsertRecords, refresh, ensureTableLoaded } = useData();
   const { user, role, worker, updateProfile } = useAuth();
 
   // Avatar Upload States
@@ -308,6 +308,85 @@ export default function Settings() {
     }
   };
 
+  // ── Granular Module Definitions for Permissions (E1–E3) ──
+  const MODULE_DEFS = [
+    { id: 'dashboard', label: 'Dashboard' },
+    { id: 'production', label: 'Production Log' },
+    { id: 'census', label: 'Bird Census' },
+    { id: 'flockhealth', label: 'Flock Health' },
+    { id: 'flocklifecycle', label: 'Flock Lifecycle' },
+    { id: 'procurement', label: 'Feed & Stock Hub' },
+    { id: 'generallivestock', label: 'General Livestock' },
+    { id: 'sales', label: 'Sales Log' },
+    { id: 'customerorders', label: 'Orders & CRM' },
+    { id: 'expenses', label: 'Expenses' },
+    { id: 'farmprojects', label: 'Farm Projects' },
+    { id: 'loans', label: 'Loan Ledger' },
+    { id: 'payroll', label: 'Payroll' },
+    { id: 'workers', label: 'Workers' },
+    { id: 'settings', label: 'Settings' }
+  ];
+
+  const getDefaultAccess = (userRole, moduleId) => {
+    if (userRole === 'admin') return 'edit';
+    if (userRole === 'manager') {
+      if (moduleId === 'payroll' || moduleId === 'settings') return 'view';
+      return 'edit';
+    }
+    if (userRole === 'veterinary') {
+      if (moduleId === 'flockhealth' || moduleId === 'flocklifecycle') return 'edit';
+      if (moduleId === 'census' || moduleId === 'production' || moduleId === 'dashboard') return 'view';
+      return 'none';
+    }
+    // Staff default
+    if (moduleId === 'production' || moduleId === 'census') return 'edit';
+    if (moduleId === 'dashboard' || moduleId === 'flockhealth' || moduleId === 'procurement') return 'view';
+    return 'none';
+  };
+
+  const getWorkerPermission = (workerId, moduleId, userRole) => {
+    const perm = (data.worker_module_permissions || []).find(
+      p => p.worker_id === workerId && p.module_id === moduleId
+    );
+    if (perm && perm.access_level) return perm.access_level;
+    return getDefaultAccess(userRole, moduleId);
+  };
+
+  const handleSetWorkerPermission = async (workerId, moduleId, accessLevel) => {
+    try {
+      const existing = (data.worker_module_permissions || []).find(
+        p => p.worker_id === workerId && p.module_id === moduleId
+      );
+      if (existing) {
+        await updateRecord('worker_module_permissions', {
+          id: existing.id,
+          access_level: accessLevel,
+          updated_at: new Date().toISOString()
+        });
+      } else {
+        await insertRecord('worker_module_permissions', {
+          worker_id: workerId,
+          module_id: moduleId,
+          access_level: accessLevel
+        });
+      }
+    } catch (err) {
+      console.error('Failed to update worker permission:', err);
+    }
+  };
+
+  const handleResetRolePreset = async (wrk) => {
+    try {
+      for (const m of MODULE_DEFS) {
+        const defaultLvl = getDefaultAccess(wrk.role, m.id);
+        await handleSetWorkerPermission(wrk.id, m.id, defaultLvl);
+      }
+      alert(`Reset ${wrk.name}'s permissions to default ${wrk.role} preset.`);
+    } catch (err) {
+      console.error('Failed to reset role preset:', err);
+    }
+  };
+
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-8">
       {/* Page Title */}
@@ -516,7 +595,7 @@ NOTIFY pgrst, 'reload schema';`}
 
             <button
               type="submit"
-              disabled={savingPrice || !isOnline}
+              disabled={savingPrice}
               className="w-full bg-dark-green text-white font-bold py-2.5 rounded-xl text-sm hover:bg-emerald-900 transition-all shadow-sm flex items-center justify-center gap-2 disabled:opacity-50"
             >
               {savingPrice ? 'Saving...' : 'Save Pricing Settings'}
@@ -608,69 +687,76 @@ NOTIFY pgrst, 'reload schema';`}
         </div>
       )}
 
-      {/* Grid Section 2.5: Granular Worker Portal Permissions (Item XIV) */}
+      {/* Grid Section 2.5: Worker Module Permissions Matrix (E1–E3) */}
       {role === 'admin' && (
         <div className="bg-white p-6 rounded-2xl border border-border-farm shadow-sm space-y-4">
-          <div className="flex items-center justify-between border-b border-border-farm pb-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border-farm pb-3">
             <div className="flex items-center gap-2 text-dark-green font-serif font-bold text-lg">
               <KeyRound className="w-5 h-5 text-primary" />
-              <span>Staff Portal Permissions & Access Control</span>
+              <span>Worker Module Permissions Matrix</span>
             </div>
             <span className="text-xs text-text-muted font-bold">Admin Managed</span>
           </div>
 
           <p className="text-xs text-text-muted">
-            Configure which operational modules each staff member is permitted to log and view on their portal landing:
+            Configure granular access levels (<strong>None</strong>, <strong>View Only</strong>, or <strong>Full Edit</strong>) for each staff member across farm modules:
           </p>
 
-          <div className="overflow-x-auto rounded-xl border border-border-farm">
+          <div className="overflow-x-auto rounded-xl border border-border-farm scrollbar-thin">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
                 <tr className="bg-bg-farm border-b border-border-farm text-[10px] uppercase font-bold text-text-muted">
-                  <th className="p-3">Staff Member</th>
-                  <th className="p-3 text-center">Daily Eggs & Feed Log</th>
-                  <th className="p-3 text-center">Bird Census</th>
-                  <th className="p-3 text-center">Flock Health</th>
-                  <th className="p-3 text-center">Feed Stock Balance</th>
-                  <th className="p-3 text-center">Advance Request</th>
+                  <th className="p-3 sticky left-0 bg-bg-farm z-10">Worker</th>
+                  <th className="p-3">Role</th>
+                  {MODULE_DEFS.map(m => (
+                    <th key={m.id} className="p-2.5 text-center whitespace-nowrap">{m.label}</th>
+                  ))}
+                  <th className="p-3 text-right">Reset</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-farm/50">
-                {(data.workers || []).filter(w => w.role === 'staff').map(staff => (
-                  <tr key={staff.id} className="hover:bg-bg-farm/40 transition-colors">
-                    <td className="p-3 font-bold text-dark-green flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-full bg-emerald-100 text-dark-green text-[10px] font-bold flex items-center justify-center">
-                        {staff.name?.charAt(0) || 'S'}
-                      </div>
-                      <span>{staff.name}</span>
-                    </td>
-                    <td className="p-3 text-center">
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-dark-green">
-                        ✓ Enabled
-                      </span>
-                    </td>
-                    <td className="p-3 text-center">
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-dark-green">
-                        ✓ Enabled
-                      </span>
-                    </td>
-                    <td className="p-3 text-center">
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-dark-green">
-                        ✓ Enabled
-                      </span>
-                    </td>
-                    <td className="p-3 text-center">
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-800">
-                        Read-Only
-                      </span>
-                    </td>
-                    <td className="p-3 text-center">
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-dark-green">
-                        ✓ Enabled
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                {(data.workers || []).map(wrk => {
+                  return (
+                    <tr key={wrk.id} className="hover:bg-bg-farm/40 transition-colors">
+                      <td className="p-3 font-bold text-dark-green sticky left-0 bg-white z-10 whitespace-nowrap">
+                        {wrk.name}
+                      </td>
+                      <td className="p-3 uppercase text-[10px] font-bold text-text-muted">
+                        {wrk.role}
+                      </td>
+                      {MODULE_DEFS.map(m => {
+                        const perm = getWorkerPermission(wrk.id, m.id, wrk.role);
+                        return (
+                          <td key={m.id} className="p-2 text-center">
+                            <select
+                              value={perm}
+                              onChange={(e) => handleSetWorkerPermission(wrk.id, m.id, e.target.value)}
+                              className={`text-[11px] font-bold px-2 py-1 rounded border outline-none cursor-pointer ${
+                                perm === 'edit'
+                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                                  : perm === 'view'
+                                  ? 'bg-blue-50 text-blue-800 border-blue-300'
+                                  : 'bg-gray-100 text-gray-500 border-gray-200'
+                              }`}
+                            >
+                              <option value="none">None</option>
+                              <option value="view">View</option>
+                              <option value="edit">Edit</option>
+                            </select>
+                          </td>
+                        );
+                      })}
+                      <td className="p-3 text-right whitespace-nowrap">
+                        <button
+                          onClick={() => handleResetRolePreset(wrk)}
+                          className="text-[10px] font-bold text-primary hover:underline"
+                        >
+                          Preset
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

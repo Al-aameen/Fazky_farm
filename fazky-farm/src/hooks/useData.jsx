@@ -34,7 +34,9 @@ export const TABLE_NAMES = [
   'vaccination_schedules',
   'loan_requests',
   'general_livestock_detailed',
-  'worker_permissions'
+  'worker_permissions',
+  'worker_module_permissions',
+  'casual_worker_entries'
 ];
 
 // Tier 1: Small reference tables needed everywhere — loaded once and kept in memory
@@ -49,7 +51,8 @@ export const GLOBAL_TABLES = [
   'farm_projects',
   'vaccination_schedules',
   'feed_inventory',
-  'worker_permissions'
+  'worker_permissions',
+  'worker_module_permissions'
 ];
 
 // Tier 2: Page-specific mapping — only fetch what the active page needs
@@ -68,7 +71,7 @@ export const PAGE_TABLES_MAP = {
   procurement:      ['maize_records', 'feed_production', 'feed_inventory', 'feed_inventory_log', 'expenses_log'],
   loans:            ['loans', 'loan_repayments', 'loan_requests'],
   payroll:          ['loans', 'loan_repayments', 'off_pays'],
-  workers:          ['workers', 'pens', 'pen_worker_history', 'pen_name_history'],
+  workers:          ['workers', 'pens', 'pen_worker_history', 'pen_name_history', 'census_counts', 'loans', 'loan_repayments'],
   generallivestock: ['general_livestock_detailed', 'general_census'],
   settings:         ['workers', 'egg_price_settings', 'worker_permissions', 'pen_name_history', 'worker_name_aliases']
 };
@@ -335,10 +338,6 @@ export function DataProvider({ children }) {
 
   // Insert record
   const insertRecord = async (table, record) => {
-    if (!isOnline) {
-      throw new Error('You are currently offline. Please reconnect to save changes.');
-    }
-
     const { data: inserted, error } = await supabase
       .from(table)
       .insert(record)
@@ -361,10 +360,6 @@ export function DataProvider({ children }) {
 
   // Update record
   const updateRecord = async (table, record) => {
-    if (!isOnline) {
-      throw new Error('You are currently offline. Please reconnect to save changes.');
-    }
-
     const { data: updated, error } = await supabase
       .from(table)
       .update(record)
@@ -387,10 +382,6 @@ export function DataProvider({ children }) {
 
   // Delete record
   const deleteRecord = async (table, id) => {
-    if (!isOnline) {
-      throw new Error('You are currently offline. Please reconnect to save changes.');
-    }
-
     const { error } = await supabase
       .from(table)
       .delete()
@@ -409,17 +400,15 @@ export function DataProvider({ children }) {
     return true;
   };
 
-  // Bulk upsert records (Excel / CSV imports)
-  const bulkInsertRecords = async (tableName, records) => {
+  // Bulk upsert records (Excel / CSV imports / Batch saves)
+  const bulkInsertRecords = async (tableName, records, options = {}) => {
     if (!records || records.length === 0) return { success: true, count: 0 };
-    if (!isOnline) {
-      return { success: false, error: 'You are offline. Cannot import while offline.' };
-    }
 
     try {
+      const upsertOptions = options?.onConflict ? { onConflict: options.onConflict } : undefined;
       const { data: insertedRows, error } = await supabase
         .from(tableName)
-        .upsert(records)
+        .upsert(records, upsertOptions)
         .select();
 
       if (error) throw error;
@@ -430,10 +419,10 @@ export function DataProvider({ children }) {
         [tableName]: mergeRecords(prev[tableName], insertedRows || records)
       }));
 
-      return { success: true, count: insertedRows?.length || records.length };
+      return { success: true, count: insertedRows?.length || records.length, data: insertedRows };
     } catch (err) {
       console.error(`[useData] Bulk insert error on ${tableName}:`, err);
-      return { success: false, error: err.message };
+      return { success: false, error: err.message || String(err) };
     }
   };
 

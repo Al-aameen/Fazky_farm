@@ -3,7 +3,7 @@ import { useData } from '../hooks/useData';
 import { useAuth } from '../context/AuthContext';
 import DatePicker from '../components/DatePicker';
 import { exportToExcel, parseImportFile } from '../lib/csvExportImport';
-import { Plus, Receipt, Calendar, Download, Upload, ChevronRight, Hammer, Filter, Edit3, Trash2 } from 'lucide-react';
+import { Plus, Receipt, Calendar, Download, Upload, ChevronRight, Hammer, Filter, Edit3, Trash2, AlertCircle } from 'lucide-react';
 
 export default function ExpensesLog() {
   const { data, insertRecord, updateRecord, deleteRecord, bulkInsertRecords } = useData();
@@ -42,6 +42,9 @@ export default function ExpensesLog() {
   const [expAmt, setExpAmt] = useState('');
   const [expProjectId, setExpProjectId] = useState('');
   const [expRemarks, setExpRemarks] = useState('');
+
+  // Error state
+  const [errorMessage, setErrorMessage] = useState(null);
 
   const projects = data.farm_projects || [];
   const projectMap = Object.fromEntries(projects.map(p => [p.id, p.title]));
@@ -90,6 +93,7 @@ export default function ExpensesLog() {
     e.preventDefault();
     const amt = parseFloat(expAmt);
     if (!expDesc || isNaN(amt) || amt <= 0) return;
+    setErrorMessage(null);
 
     try {
       const dayOfWeekStr = new Date(expDate).toLocaleDateString('en-US', { weekday: 'long' });
@@ -103,6 +107,7 @@ export default function ExpensesLog() {
         created_by: worker?.id || null
       });
 
+      // Only clear on success
       setShowAddExpense(false);
       setExpDesc('');
       setExpAmt('');
@@ -110,7 +115,7 @@ export default function ExpensesLog() {
       setExpRemarks('');
     } catch (err) {
       console.error('Failed to log expense:', err);
-      alert('Failed to log expense: ' + err.message);
+      setErrorMessage(err?.message || 'Failed to log expense. Your data is still on screen.');
     }
   };
 
@@ -131,6 +136,7 @@ export default function ExpensesLog() {
     if (!editDesc || isNaN(amt) || amt <= 0) return;
 
     setEditSaving(true);
+    setErrorMessage(null);
     try {
       const dayOfWeek = new Date(editDate).toLocaleDateString('en-US', { weekday: 'long' });
       await updateRecord('expenses_log', {
@@ -146,7 +152,7 @@ export default function ExpensesLog() {
       setEditingExpense(null);
     } catch (err) {
       console.error('Edit expense failed:', err);
-      alert('Failed to update expense: ' + err.message);
+      setErrorMessage(err?.message || 'Failed to update expense.');
     } finally {
       setEditSaving(false);
     }
@@ -166,6 +172,18 @@ export default function ExpensesLog() {
 
   return (
     <div className="p-6 space-y-6">
+      {/* Error Banner */}
+      {errorMessage && (
+        <div role="alert" className="flex items-start gap-3 bg-red-50 border border-red-300 rounded-2xl px-5 py-4 text-xs text-red-800 font-sans shadow-sm">
+          <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-bold text-red-800">Save failed — your data is still on screen</p>
+            <p className="mt-0.5 text-red-700">{errorMessage}</p>
+          </div>
+          <button onClick={() => setErrorMessage(null)} className="shrink-0 text-red-500 hover:text-red-700 font-bold text-xs">Dismiss</button>
+        </div>
+      )}
+
       {/* Metrics Card & Filters */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
         {/* Monthly Summary Card */}

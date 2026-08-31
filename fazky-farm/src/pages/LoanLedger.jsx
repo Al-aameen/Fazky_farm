@@ -18,7 +18,7 @@ import {
 import { exportToExcel } from '../lib/csvExportImport';
 
 export default function LoanLedger() {
-  const { data, insertRecord, updateRecord, isOnline } = useData();
+  const { data, insertRecord, updateRecord } = useData();
   const { role } = useAuth();
   const [selectedLoanId, setSelectedLoanId] = useState(null);
 
@@ -41,6 +41,9 @@ export default function LoanLedger() {
 
   // Advance requests list
   const pendingRequests = (data.loan_requests || []).filter(r => r.status === 'pending');
+
+  // Shared error banner state
+  const [errorMessage, setErrorMessage] = useState(null);
 
   // Calculate stats for each loan
   const getLoanStats = (loan) => {
@@ -65,6 +68,7 @@ export default function LoanLedger() {
     if (!loanWorkerId || isNaN(total) || isNaN(months) || months <= 0) return;
 
     setSubmittingLoan(true);
+    setErrorMessage(null);
     try {
       const monthlyAmt = Math.round((total / months) * 100) / 100;
       await insertRecord('loans', {
@@ -75,13 +79,14 @@ export default function LoanLedger() {
         monthly_amount: monthlyAmt
       });
 
+      // Only clear on success
       setShowAddLoan(false);
       setLoanWorkerId('');
       setLoanTotal('');
       setLoanMonths(1);
     } catch (err) {
       console.error('Failed to issue loan:', err);
-      alert('Failed to issue loan: ' + err.message);
+      setErrorMessage(err?.message || 'Failed to issue loan.');
     } finally {
       setSubmittingLoan(false);
     }
@@ -93,7 +98,7 @@ export default function LoanLedger() {
     if (!window.confirm(`Approve salary advance of ₦${Number(request.requested_amount).toLocaleString()} for ${workerInfo?.name || 'Worker'}?`)) {
       return;
     }
-
+    setErrorMessage(null);
     try {
       const total = Number(request.requested_amount);
       const months = Number(request.duration_months) || 1;
@@ -115,13 +120,14 @@ export default function LoanLedger() {
       });
     } catch (err) {
       console.error('Approval error:', err);
-      alert('Approval error: ' + err.message);
+      setErrorMessage(err?.message || 'Approval failed.');
     }
   };
 
   // Reject Pending Advance Request
   const handleRejectRequest = async (request) => {
     if (!window.confirm('Reject this salary advance request?')) return;
+    setErrorMessage(null);
     try {
       await updateRecord('loan_requests', {
         id: request.id,
@@ -129,7 +135,7 @@ export default function LoanLedger() {
       });
     } catch (err) {
       console.error('Reject error:', err);
-      alert('Reject error: ' + err.message);
+      setErrorMessage(err?.message || 'Failed to reject request.');
     }
   };
 
@@ -140,6 +146,7 @@ export default function LoanLedger() {
     if (isNaN(amt) || amt <= 0 || !selectedLoanId) return;
 
     setSubmittingRep(true);
+    setErrorMessage(null);
     try {
       const loan = (data.loans || []).find(l => l.id === selectedLoanId);
       if (!loan) return;
@@ -156,12 +163,13 @@ export default function LoanLedger() {
         comments: repComments || 'Payroll advance repayment'
       });
 
+      // Only clear on success
       setShowAddRepayment(false);
       setRepAmount('');
       setRepComments('');
     } catch (err) {
       console.error('Failed to record repayment:', err);
-      alert('Error: ' + err.message);
+      setErrorMessage(err?.message || 'Failed to record repayment.');
     } finally {
       setSubmittingRep(false);
     }
@@ -169,6 +177,18 @@ export default function LoanLedger() {
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12">
+      {/* Error Banner */}
+      {errorMessage && (
+        <div role="alert" className="flex items-start gap-3 bg-red-50 border border-red-300 rounded-2xl px-5 py-4 text-xs text-red-800 font-sans shadow-sm">
+          <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-bold text-red-800">Save failed — your data is still on screen</p>
+            <p className="mt-0.5 text-red-700">{errorMessage}</p>
+          </div>
+          <button onClick={() => setErrorMessage(null)} className="shrink-0 text-red-500 hover:text-red-700 font-bold text-xs">Dismiss</button>
+        </div>
+      )}
+
       {/* ── Top Header ── */}
       <div className="bg-white p-5 sm:p-6 rounded-3xl border border-border-farm shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
@@ -497,7 +517,7 @@ export default function LoanLedger() {
                 </button>
                 <button
                   type="submit"
-                  disabled={submittingLoan || !isOnline}
+                  disabled={submittingLoan}
                   className="flex-1 bg-primary hover:bg-dark-green text-white font-bold py-2.5 rounded-xl shadow-sm transition-all"
                 >
                   {submittingLoan ? 'Issuing...' : 'Issue Advance'}
@@ -573,7 +593,7 @@ export default function LoanLedger() {
                 </button>
                 <button
                   type="submit"
-                  disabled={submittingRep || !isOnline}
+                  disabled={submittingRep}
                   className="flex-1 bg-primary hover:bg-dark-green text-white font-bold py-2.5 rounded-xl shadow-sm transition-all"
                 >
                   {submittingRep ? 'Saving...' : 'Save Repayment'}

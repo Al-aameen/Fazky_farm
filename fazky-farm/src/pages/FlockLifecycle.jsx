@@ -239,21 +239,30 @@ export default function FlockLifecycle() {
     setGridSaved(false);
   };
 
+  const getCumulativeMortality = useCallback((batchId, beforeDate) => {
+    return growerLogs
+      .filter(l => l.batch_id === batchId && l.date < beforeDate)
+      .reduce((sum, l) => sum + (Number(l.mortality) || 0), 0);
+  }, [growerLogs]);
+
   const handleSaveAllGrowth = async () => {
     setGridSaving(true);
     try {
       for (const batch of growingBatches) {
         const row = getGridRow(batch.id);
-        if (!row.headcount || parseInt(row.headcount) <= 0) continue;
+        const prevMort = getCumulativeMortality(batch.id, growerDate);
+        const curMort = row.mortality !== '' ? (parseInt(row.mortality) || 0) : 0;
+        const initialCount = Number(batch.quantity_arrived) || 0;
+        const computedHeadcount = Math.max(0, initialCount - (prevMort + curMort));
 
-        const ex      = existingLog(batch.id);
+        const ex = existingLog(batch.id);
         const payload = {
           batch_id:      batch.id,
           date:          growerDate,
-          headcount:     parseInt(row.headcount),
+          headcount:     computedHeadcount,
           avg_weight:    row.avg_weight    !== '' ? parseFloat(row.avg_weight)    : null,
           feed_consumed: row.feed_consumed !== '' ? parseFloat(row.feed_consumed) : null,
-          mortality:     row.mortality     !== '' ? parseInt(row.mortality)       : null,
+          mortality:     curMort,
           health_notes:  row.health_notes  || null,
         };
         if (ex) {
@@ -773,26 +782,26 @@ export default function FlockLifecycle() {
                 <table className="w-full font-sans" style={{ minWidth: '820px' }}>
                   <thead className="bg-bg-farm border-b border-border-farm">
                     <tr>
-                      <th className="p-3 text-left text-[10px] text-text-muted uppercase font-black tracking-wider" style={{ minWidth: 170 }}>
+                      <th className="p-3 text-left text-[10px] text-text-muted uppercase font-black tracking-wider" style={{ minWidth: 160 }}>
                         Batch
                       </th>
-                      <th className="p-3 text-center text-[10px] text-text-muted uppercase font-black tracking-wider" style={{ width: 80 }}>
+                      <th className="p-3 text-center text-[10px] text-text-muted uppercase font-black tracking-wider" style={{ width: 75 }}>
                         Days Old
                       </th>
-                      <th className="p-3 text-center text-[10px] text-text-muted uppercase font-black tracking-wider" style={{ minWidth: 130 }}>
+                      <th className="p-3 text-center text-[10px] text-text-muted uppercase font-black tracking-wider" style={{ minWidth: 120 }}>
                         Progress
                       </th>
-                      <th className="p-3 text-center text-[10px] text-text-muted uppercase font-black tracking-wider" style={{ width: 110 }}>
-                        Headcount *
-                      </th>
                       <th className="p-3 text-center text-[10px] text-text-muted uppercase font-black tracking-wider" style={{ width: 100 }}>
+                        Weekly Mortality *
+                      </th>
+                      <th className="p-3 text-center text-[10px] text-text-muted uppercase font-black tracking-wider" style={{ width: 110 }}>
+                        Est. Birds
+                      </th>
+                      <th className="p-3 text-center text-[10px] text-text-muted uppercase font-black tracking-wider" style={{ width: 95 }}>
                         Avg Wt (kg)
                       </th>
-                      <th className="p-3 text-center text-[10px] text-text-muted uppercase font-black tracking-wider" style={{ width: 100 }}>
+                      <th className="p-3 text-center text-[10px] text-text-muted uppercase font-black tracking-wider" style={{ width: 95 }}>
                         Feed (kg)
-                      </th>
-                      <th className="p-3 text-center text-[10px] text-text-muted uppercase font-black tracking-wider" style={{ width: 90 }}>
-                        Mortality
                       </th>
                       <th className="p-3 text-left text-[10px] text-text-muted uppercase font-black tracking-wider">
                         Health Notes
@@ -803,6 +812,11 @@ export default function FlockLifecycle() {
                     {growingBatches.map((batch, idx) => {
                       const row  = getGridRow(batch.id);
                       const prog = weekProgress(batch, growerDate);
+                      const prevMort = getCumulativeMortality(batch.id, growerDate);
+                      const curMort = row.mortality !== '' ? (parseInt(row.mortality) || 0) : 0;
+                      const initialBirds = Number(batch.quantity_arrived) || 0;
+                      const estBirds = Math.max(0, initialBirds - (prevMort + curMort));
+
                       return (
                         <tr key={batch.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-amber-50/20'}>
                           {/* Batch name */}
@@ -844,13 +858,22 @@ export default function FlockLifecycle() {
                             )}
                           </td>
 
-                          {/* Headcount */}
+                          {/* Weekly Mortality — Primary Editable Input */}
                           <td className="p-2">
                             <GridCell
-                              value={row.headcount}
-                              onChange={v => updateGridCell(batch.id, 'headcount', v)}
-                              placeholder="count"
+                              value={row.mortality}
+                              onChange={v => updateGridCell(batch.id, 'mortality', v)}
+                              placeholder="0"
+                              cellClass={parseInt(row.mortality) > 0 ? 'text-red-600 border-red-200 bg-red-50' : ''}
                             />
+                          </td>
+
+                          {/* Est. Birds — Auto-calculated */}
+                          <td className="p-3 text-center">
+                            <span className="font-mono font-bold text-dark-green text-xs bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
+                              {estBirds.toLocaleString()}
+                            </span>
+                            <span className="text-[9px] text-text-muted block font-semibold mt-0.5">auto-calc</span>
                           </td>
 
                           {/* Avg Weight */}
@@ -871,16 +894,6 @@ export default function FlockLifecycle() {
                             />
                           </td>
 
-                          {/* Mortality */}
-                          <td className="p-2">
-                            <GridCell
-                              value={row.mortality}
-                              onChange={v => updateGridCell(batch.id, 'mortality', v)}
-                              placeholder="0"
-                              cellClass={parseInt(row.mortality) > 0 ? 'text-red-600 border-red-200 bg-red-50' : ''}
-                            />
-                          </td>
-
                           {/* Health Notes */}
                           <td className="p-2">
                             <input
@@ -888,8 +901,7 @@ export default function FlockLifecycle() {
                               value={row.health_notes}
                               onChange={e => updateGridCell(batch.id, 'health_notes', e.target.value)}
                               placeholder="Notes…"
-                              className="w-full text-xs font-semibold bg-white border border-border-farm rounded-lg px-2 py-1.5
-                                focus:ring-2 focus:ring-accent outline-none transition-all min-h-[36px] hover:border-accent/60"
+                              className="w-full text-xs font-medium bg-transparent border border-border-farm rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-accent"
                             />
                           </td>
                         </tr>

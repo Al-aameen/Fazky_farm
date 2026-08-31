@@ -8,19 +8,34 @@ import { exportToExcel, parseImportFile } from '../lib/csvExportImport';
 import { Plus, Save, Edit3, Settings, ShieldAlert, Check, Download, Search, Upload, Calendar, Hash, Tag, HelpCircle } from 'lucide-react';
 
 export default function CensusMatrix() {
-  const { data, insertRecord, updateRecord, isOnline, bulkInsertRecords, ensureDateLoaded } = useData();
+  const { data, insertRecord, updateRecord, bulkInsertRecords, ensureDateLoaded } = useData();
   const { role, worker } = useAuth();
 
   const todayStr = () => new Date().toISOString().split('T')[0];
   const [selectedDate, setSelectedDate] = useState(todayStr); // Exact period date (e.g. 2026-08-28 or 2025-12-31)
+  const [selectedMonth, setSelectedMonth] = useState(todayStr().slice(0, 7)); // Month-first browsing (G1)
   const [countDateInput, setCountDateInput] = useState('');    // Date physically counted
   const [periodLabelInput, setPeriodLabelInput] = useState(''); // e.g. "December 2025 Closing"
   const [gridData, setGridData] = useState({});               // `${penId}-${workerId}-${side}-${slot}` -> count
+  const [initialGridData, setInitialGridData] = useState({}); // Snapshot for dirty tracking (G2)
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [errorMessage, setErrorMessage] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
   const censusImportRef = useRef(null);
+
+  // New Count Modal state (G1)
+  const [showNewCountModal, setShowNewCountModal] = useState(false);
+  const [newCountDate, setNewCountDate] = useState(todayStr());
+  const [newCountPhysicalDate, setNewCountPhysicalDate] = useState(todayStr());
+  const [newCountPeriodLabel, setNewCountPeriodLabel] = useState('');
+
+  // Manage Pens Modal state (G3)
+  const [showManagePens, setShowManagePens] = useState(false);
+  const [renamingPenId, setRenamingPenId] = useState(null);
+  const [newDisplayNameInput, setNewDisplayNameInput] = useState('');
+  const [savingRename, setSavingRename] = useState(false);
 
   // Auto-fetch historical census counts for the selected date if not cached
   useEffect(() => {
@@ -28,6 +43,46 @@ export default function CensusMatrix() {
       ensureDateLoaded('census_counts', selectedDate);
     }
   }, [selectedDate, ensureDateLoaded]);
+
+  // Keep selectedMonth in sync if selectedDate changes
+  useEffect(() => {
+    if (selectedDate && selectedDate.slice(0, 7) !== selectedMonth) {
+      setSelectedMonth(selectedDate.slice(0, 7));
+    }
+  }, [selectedDate]);
+
+  // ── Month-First Recorded Dates List (G1) ──
+  const recordedDatesInMonth = useMemo(() => {
+    const counts = data.census_counts || [];
+    const dateMap = new Map();
+    counts.forEach(c => {
+      if (c.date && c.date.startsWith(selectedMonth)) {
+        if (!dateMap.has(c.date)) {
+          dateMap.set(c.date, {
+            date: c.date,
+            countDate: c.count_date || c.date,
+            periodLabel: c.period_label || '',
+            totalBirds: 0
+          });
+        }
+        dateMap.get(c.date).totalBirds += (c.bird_count || 0);
+      }
+    });
+    return Array.from(dateMap.values()).sort((a, b) => new Date(b.date) - new Date(a.date));
+  }, [data.census_counts, selectedMonth]);
+
+  // ── Dirty Cells Set (G2) ──
+  const dirtyKeys = useMemo(() => {
+    const dirty = new Set();
+    Object.keys(gridData).forEach(key => {
+      const current = gridData[key] === '' ? 0 : Number(gridData[key]) || 0;
+      const initial = initialGridData[key] === '' ? 0 : Number(initialGridData[key]) || 0;
+      if (current !== initial) {
+        dirty.add(key);
+      }
+    });
+    return dirty;
+  }, [gridData, initialGridData]);
 
   // Modal states for Add Pen
   const [showAddPen, setShowAddPen] = useState(false);
@@ -181,6 +236,7 @@ export default function CensusMatrix() {
     });
 
     setGridData(newGrid);
+    setInitialGridData(newGrid); // Snapshot for dirty tracking (G2)
     if (foundCountDate) setCountDateInput(foundCountDate);
     else setCountDateInput('');
     if (foundPeriodLabel) setPeriodLabelInput(foundPeriodLabel);
@@ -189,12 +245,13 @@ export default function CensusMatrix() {
 
   const handleCellChange = (penId, workerId, section, slot, val) => {
     const key = `${penId}-${workerId}-${section}-${slot}`;
-    const num = val === '' ? '' : parseInt(val, 10);
-    if (isNaN(num) && val !== '') return;
+    // Clean to numeric digits only
+    const cleanStr = String(val).replace(/[^0-9]/g, '');
+    const num = cleanStr === '' ? '' : parseInt(cleanStr, 10);
 
     setGridData(prev => ({
       ...prev,
-      [key]: num
+      [key]: isNaN(num) ? '' : num
     }));
   };
 
@@ -267,16 +324,13 @@ export default function CensusMatrix() {
   });
 
   // ── 4D. Save Census Grid ───────────────────────────────────────────────────
-  const handleSaveGrid = async () => {
-    if (!isOnline) {
-      alert('You are currently offline. Please reconnect to save changes.');
-      return;
-    }
-
+  const handleSaveGrid = async (filterKeys = null) => {
     setSaving(true);
     setSaveSuccess(false);
+    setErrorMessage(null);
 
     try {
+      if (import.meta.env.DEV) console.log('[CensusMatrix] handleSaveGrid invoked for date:', selectedDate);
       const recordsToUpsert = [];
       const nowCountDate = countDateInput || selectedDate;
       const nowLabel = periodLabelInput.trim() || null;
@@ -285,6 +339,8 @@ export default function CensusMatrix() {
         const wId = col.workerId === 'unassigned' ? null : col.workerId;
         for (let slot = 1; slot <= col.slotCount; slot++) {
           const key = `${col.penId}-${col.workerId}-${col.section}-${slot}`;
+          if (filterKeys && !filterKeys.has(key)) continue;
+
           const val = Number(gridData[key]) || 0;
 
           recordsToUpsert.push({
@@ -301,19 +357,87 @@ export default function CensusMatrix() {
         }
       });
 
+      if (recordsToUpsert.length === 0) {
+        setSaving(false);
+        return;
+      }
+
       const res = await bulkInsertRecords('census_counts', recordsToUpsert);
       if (res && res.error) {
         throw new Error(res.error);
       }
 
+      setInitialGridData({ ...gridData });
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 4000);
     } catch (err) {
       console.error('Failed to save census matrix:', err);
-      alert('Failed to save census matrix: ' + err.message);
+      setErrorMessage(err?.message || 'Failed to save census records. Your data is still on screen.');
     } finally {
       setSaving(false);
     }
+  };
+
+  // G2: Save only dirty (changed) cells
+  const handleSaveChangedCellsOnly = () => {
+    if (dirtyKeys.size === 0) return;
+    handleSaveGrid(dirtyKeys);
+  };
+
+  // G2: Quick save a single worker column
+  const handleSaveWorkerColumn = async (col) => {
+    const colKeys = new Set();
+    for (let slot = 1; slot <= col.slotCount; slot++) {
+      colKeys.add(`${col.penId}-${col.workerId}-${col.section}-${slot}`);
+    }
+    await handleSaveGrid(colKeys);
+  };
+
+  // G3: Safe Rename Pen handler (never modifies pens.name!)
+  const handleRenamePen = async (penId, newDisplayName) => {
+    if (!newDisplayName.trim()) return;
+    setSavingRename(true);
+    try {
+      // 1. Close current active pen_name_history row
+      const currentActive = (data.pen_name_history || []).find(h => h.pen_id === penId && !h.end_date);
+      if (currentActive) {
+        await updateRecord('pen_name_history', {
+          id: currentActive.id,
+          end_date: todayStr()
+        });
+      }
+
+      // 2. Insert new pen_name_history row starting today
+      await insertRecord('pen_name_history', {
+        pen_id: penId,
+        display_name: newDisplayName.trim(),
+        start_date: todayStr(),
+        is_primary: true
+      });
+
+      setRenamingPenId(null);
+      setNewDisplayNameInput('');
+    } catch (err) {
+      console.error('Failed to rename pen:', err);
+      alert('Failed to rename pen: ' + err.message);
+    } finally {
+      setSavingRename(false);
+    }
+  };
+
+  // G1: Handler for starting a new census count
+  const handleStartNewCount = () => {
+    if (!newCountDate) return;
+    const existing = (data.census_counts || []).some(c => c.date === newCountDate);
+    if (existing) {
+      if (!window.confirm(`⚠️ Records already exist for ${newCountDate}.\n\nDo you want to open and modify this existing census?`)) {
+        return;
+      }
+    }
+    setSelectedDate(newCountDate);
+    setCountDateInput(newCountPhysicalDate || newCountDate);
+    setPeriodLabelInput(newCountPeriodLabel || '');
+    setShowNewCountModal(false);
   };
 
   // Filter columns by search term
@@ -328,26 +452,98 @@ export default function CensusMatrix() {
 
   return (
     <div className="p-6 space-y-6">
+      {/* ── G1. Month-First Navigation Bar ── */}
+      <div className="bg-white border border-border-farm rounded-2xl p-4 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2">
+            <Calendar className="w-5 h-5 text-primary" />
+            <span className="font-serif font-bold text-dark-green text-sm">Census Month:</span>
+          </div>
+          <input
+            type="month"
+            value={selectedMonth}
+            onChange={(e) => setSelectedMonth(e.target.value)}
+            className="bg-bg-farm border border-border-farm rounded-xl px-3 py-1.5 text-xs font-bold text-dark-green focus:ring-2 focus:ring-primary outline-none cursor-pointer"
+          />
+
+          {/* Recorded Census Counts in Selected Month */}
+          <div className="flex flex-wrap items-center gap-2">
+            {recordedDatesInMonth.length === 0 ? (
+              <span className="text-xs text-text-muted italic">No counts recorded in {selectedMonth}</span>
+            ) : (
+              recordedDatesInMonth.map(rec => {
+                const isSelected = rec.date === selectedDate;
+                return (
+                  <button
+                    key={rec.date}
+                    onClick={() => setSelectedDate(rec.date)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all border ${
+                      isSelected
+                        ? 'bg-primary text-white border-primary shadow-sm'
+                        : 'bg-bg-farm text-dark-green border-border-farm hover:bg-emerald-50'
+                    }`}
+                  >
+                    <span>📅 {rec.date}</span>
+                    {rec.periodLabel && (
+                      <span className={`text-[10px] font-normal px-1 rounded ${isSelected ? 'bg-white/20' : 'bg-border-farm/50'}`}>
+                        {rec.periodLabel}
+                      </span>
+                    )}
+                    <span className="font-mono text-[10px] opacity-80">
+                      ({rec.totalBirds.toLocaleString()})
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2.5 w-full md:w-auto">
+          {/* New Count Button (G1) */}
+          <button
+            onClick={() => {
+              setNewCountDate(todayStr());
+              setNewCountPhysicalDate(todayStr());
+              setNewCountPeriodLabel('');
+              setShowNewCountModal(true);
+            }}
+            className="flex items-center gap-1.5 bg-primary hover:bg-dark-green text-white font-bold px-3.5 py-2 rounded-xl text-xs shadow-sm transition-all whitespace-nowrap"
+          >
+            <Plus className="w-4 h-4" />
+            <span>+ New Count</span>
+          </button>
+
+          {/* Manage Pens Button (G3 - Admin & Manager) */}
+          {(role === 'admin' || role === 'manager') && (
+            <button
+              onClick={() => setShowManagePens(true)}
+              className="flex items-center gap-1.5 bg-bg-farm hover:bg-border-farm/40 text-dark-green font-bold px-3 py-2 rounded-xl text-xs border border-border-farm shadow-xs transition-all whitespace-nowrap"
+            >
+              <Settings className="w-3.5 h-3.5 text-primary" />
+              <span>Manage Pens</span>
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* ── Action Header Bar ── */}
       <div className="flex flex-col lg:flex-row gap-4 items-start lg:items-center justify-between bg-white border border-border-farm rounded-2xl p-4 shadow-sm">
         <div className="flex items-center gap-3">
           <span className="text-2xl">📊</span>
           <div>
-            <h3 className="font-serif text-dark-green font-bold text-lg leading-snug">Bird Census Matrix</h3>
+            <h3 className="font-serif text-dark-green font-bold text-lg leading-snug">
+              Bird Census Matrix — <span className="font-mono text-primary font-black">{selectedDate}</span>
+            </h3>
             <p className="text-[10px] text-text-muted font-sans font-medium uppercase tracking-wider mt-0.5">
-              Worker-based slot counts ({gridColumns.length} counting section{gridColumns.length !== 1 ? 's' : ''} on this date)
+              Worker-based slot counts ({gridColumns.length} counting section{gridColumns.length !== 1 ? 's' : ''})
+              {countDateInput && ` • Counted: ${countDateInput}`}
+              {periodLabelInput && ` • Label: ${periodLabelInput}`}
             </p>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
-          {/* Exact Date Picker */}
-          <DatePicker
-            label="Census Period Date"
-            value={selectedDate}
-            onChange={setSelectedDate}
-          />
-
+        <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto">
           {/* Optional: Count Performed On input */}
           <div className="flex flex-col">
             <label className="text-[9px] font-black uppercase tracking-wider text-text-muted mb-0.5">
@@ -373,7 +569,7 @@ export default function CensusMatrix() {
               value={periodLabelInput}
               onChange={(e) => setPeriodLabelInput(e.target.value)}
               placeholder="e.g. Dec 2025 Closing"
-              className="bg-bg-farm border border-border-farm rounded-xl px-2.5 py-1.5 text-xs font-semibold text-text-primary focus:ring-2 focus:ring-primary outline-none max-w-[160px]"
+              className="bg-bg-farm border border-border-farm rounded-xl px-2.5 py-1.5 text-xs font-semibold text-text-primary focus:ring-2 focus:ring-primary outline-none max-w-[150px]"
             />
           </div>
 
@@ -399,7 +595,7 @@ export default function CensusMatrix() {
               });
               exportToExcel(`fazky_bird_census_${selectedDate}`, 'Census', exportRows);
             }}
-            className="flex items-center gap-1.5 bg-white hover:bg-emerald-50 text-dark-green font-bold px-3 py-2 rounded-xl text-xs border border-border-farm shadow-sm transition-all"
+            className="flex items-center gap-1 bg-white hover:bg-emerald-50 text-dark-green font-bold px-3 py-2 rounded-xl text-xs border border-border-farm shadow-sm transition-all"
             title="Export current census grid as Excel (.xlsx)"
           >
             <Download className="w-3.5 h-3.5 text-primary" />
@@ -410,16 +606,29 @@ export default function CensusMatrix() {
           <button
             type="button"
             onClick={() => setShowShortcutsModal(true)}
-            className="flex items-center gap-1.5 bg-white hover:bg-emerald-50 text-dark-green font-bold px-3 py-2 rounded-xl text-xs border border-border-farm shadow-sm transition-all"
+            className="flex items-center gap-1 bg-white hover:bg-emerald-50 text-dark-green font-bold px-2.5 py-2 rounded-xl text-xs border border-border-farm shadow-sm transition-all"
             title="Keyboard navigation & shortcuts cheat sheet"
           >
             <HelpCircle className="w-3.5 h-3.5 text-primary" />
             <span className="hidden md:inline">Shortcuts</span>
           </button>
 
+          {/* G2: Save Changed Cells Only */}
+          {dirtyKeys.size > 0 && (
+            <button
+              onClick={handleSaveChangedCellsOnly}
+              disabled={saving}
+              className="flex items-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-white font-bold px-3.5 py-2 rounded-xl text-xs shadow-md transition-all animate-pulse"
+              title="Save only cells with modifications"
+            >
+              <Save className="w-3.5 h-3.5" />
+              <span>Save Changed ({dirtyKeys.size})</span>
+            </button>
+          )}
+
           {/* Save All */}
           <button
-            onClick={handleSaveGrid}
+            onClick={() => handleSaveGrid()}
             disabled={saving}
             className={`flex items-center gap-1.5 text-white font-bold px-4 py-2 rounded-xl text-xs shadow-md transition-all ${
               saveSuccess
@@ -435,12 +644,24 @@ export default function CensusMatrix() {
             ) : (
               <>
                 <Save className="w-3.5 h-3.5" />
-                {saving ? 'Saving...' : 'Save Census Grid'}
+                {saving ? 'Saving...' : 'Save All Records'}
               </>
             )}
           </button>
         </div>
       </div>
+
+      {/* ── Error Banner ── */}
+      {errorMessage && (
+        <div role="alert" className="flex items-start gap-3 bg-red-50 border border-red-300 rounded-2xl px-5 py-4 text-xs text-red-800 font-sans shadow-sm">
+          <ShieldAlert className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-bold text-red-800">Save failed — your data is still on screen</p>
+            <p className="mt-0.5 text-red-700">{errorMessage}</p>
+          </div>
+          <button onClick={() => setErrorMessage(null)} className="shrink-0 text-red-500 hover:text-red-700 font-bold text-xs">Dismiss</button>
+        </div>
+      )}
 
       {/* ── Summary & Search Bar ── */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -512,17 +733,31 @@ export default function CensusMatrix() {
                   ))}
                 </tr>
 
-                {/* ── Header Tier 2: Worker Name ── */}
+                {/* ── Header Tier 2: Worker Name & Quick Save (G2) ── */}
                 <tr className="bg-primary text-white text-[11px] font-sans sticky top-[41px] z-20 shadow-[0_1px_0_0_rgba(0,0,0,0.15)]">
                   {penGroups.map(g =>
                     g.workers.map(w => (
                       <th
                         key={`${g.penId}-${w.workerId}`}
                         colSpan={w.hasTwoSections ? 2 : 1}
-                        className="p-2.5 text-center border-r border-white/20 font-bold tracking-tight bg-primary"
+                        className="p-2 text-center border-r border-white/20 font-bold tracking-tight bg-primary"
                       >
-                        <div className="font-serif text-xs text-white truncate max-w-[140px] mx-auto">
-                          👤 {w.workerName}
+                        <div className="flex items-center justify-between gap-1 max-w-[150px] mx-auto">
+                          <div className="font-serif text-xs text-white truncate">
+                            👤 {w.workerName}
+                          </div>
+                          {/* G2: Quick Save Worker Button */}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              w.columns.forEach(col => handleSaveWorkerColumn(col));
+                            }}
+                            title={`Save only ${w.workerName}'s slots`}
+                            className="p-1 hover:bg-white/20 rounded transition-colors text-[10px] font-bold text-white/90 hover:text-white"
+                          >
+                            💾
+                          </button>
                         </div>
                       </th>
                     ))
@@ -552,11 +787,12 @@ export default function CensusMatrix() {
                         {slotNumber}
                       </td>
 
-                      {/* Column Input Cells */}
+                      {/* Column Input Cells (C1, C2, G2) */}
                       {gridColumns.map((col, c) => {
                         const isCellValid = slotNumber <= col.slotCount;
                         const cellKey = `${col.penId}-${col.workerId}-${col.section}-${slotNumber}`;
                         const val = gridData[cellKey] ?? '';
+                        const isDirty = dirtyKeys.has(cellKey);
 
                         if (!isCellValid) {
                           return (
@@ -570,14 +806,17 @@ export default function CensusMatrix() {
                         const isAnc = isCellAnchor(r, c);
 
                         return (
-                          <td key={col.key} className="p-0 border-r border-border-farm align-middle relative">
+                          <td 
+                            key={col.key} 
+                            className={`p-0 border-r border-border-farm align-middle relative transition-colors ${
+                              isDirty && !isSel ? 'border-l-4 border-l-amber-500 bg-amber-50/40' : ''
+                            }`}
+                          >
                             <input
                               ref={el => registerRef(r, c, el)}
                               data-row={r}
                               data-col={c}
-                              type="number"
-                              step="1"
-                              min="0"
+                              type="text"
                               inputMode="numeric"
                               pattern="[0-9]*"
                               value={val}
@@ -590,6 +829,8 @@ export default function CensusMatrix() {
                               className={`w-full text-center py-2 px-1 font-mono text-sm border transition-colors select-none ${
                                 isSel
                                   ? 'bg-[#e0f0ff] text-dark-green border-blue-400 font-bold'
+                                  : isDirty
+                                  ? 'text-dark-green font-bold border-transparent bg-transparent'
                                   : 'border-transparent bg-transparent text-text-primary'
                               } ${
                                 isAnc ? 'ring-2 ring-primary ring-offset-1 z-10 bg-yellow-50/90' : ''
@@ -720,6 +961,193 @@ export default function CensusMatrix() {
       </div>
 
       {/* ── MODALS ── */}
+
+      {/* G1. Start New Census Count Modal */}
+      {showNewCountModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-2xl border border-border-farm shadow-2xl max-w-[440px] w-full overflow-hidden animate-scale-in">
+            <div className="bg-dark-green p-4 text-white font-serif font-bold text-base flex justify-between items-center">
+              <span>Start New Bird Census Count</span>
+              <button
+                onClick={() => setShowNewCountModal(false)}
+                className="text-white/60 hover:text-white font-sans text-lg"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-6 space-y-4 font-sans text-xs">
+              <div>
+                <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                  Census Period Date (Primary Key)
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={newCountDate}
+                  onChange={(e) => setNewCountDate(e.target.value)}
+                  className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary font-bold text-dark-green"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                  Count Performed On (Physical Date)
+                </label>
+                <input
+                  type="date"
+                  value={newCountPhysicalDate}
+                  onChange={(e) => setNewCountPhysicalDate(e.target.value)}
+                  className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                  Period Label (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={newCountPeriodLabel}
+                  onChange={(e) => setNewCountPeriodLabel(e.target.value)}
+                  placeholder="e.g. August 2026 Closing"
+                  className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+              </div>
+
+              <div className="flex gap-3 justify-end pt-4 border-t border-border-farm">
+                <button
+                  type="button"
+                  onClick={() => setShowNewCountModal(false)}
+                  className="px-4 py-2 border border-border-farm hover:bg-bg-farm rounded-lg font-bold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleStartNewCount}
+                  className="px-4 py-2 bg-primary hover:bg-dark-green text-white rounded-lg font-bold shadow-sm"
+                >
+                  Open Census Grid
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* G3. Manage Pens Modal (Admin Only — Immutable pens.name) */}
+      {showManagePens && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-2xl border border-border-farm shadow-2xl max-w-3xl w-full overflow-hidden animate-scale-in max-h-[85vh] flex flex-col">
+            <div className="bg-dark-green p-4 text-white font-serif font-bold text-base flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <Settings className="w-5 h-5" />
+                <span>Manage Pens &amp; Display Names</span>
+              </div>
+              <button
+                onClick={() => setShowManagePens(false)}
+                className="text-white/60 hover:text-white font-sans text-lg"
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto space-y-4 text-xs font-sans">
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-blue-900 text-[11px]">
+                💡 <strong>Historical Name Preservation:</strong> Renaming a pen adds a new entry to the historical name registry starting today. Physical labels (e.g. <code>pen_a</code>) remain permanent so past imports never break.
+              </div>
+
+              <table className="w-full border-collapse text-left text-xs">
+                <thead>
+                  <tr className="bg-bg-farm border-b border-border-farm font-bold text-text-muted uppercase tracking-wider">
+                    <th className="p-2.5">Physical Key</th>
+                    <th className="p-2.5">Current Display Name</th>
+                    <th className="p-2.5 text-center">Slots</th>
+                    <th className="p-2.5 text-center">Generation</th>
+                    <th className="p-2.5 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border-farm">
+                  {(data.pens || []).map(pen => {
+                    const currentDisplayName = resolvePenDisplayName(pen.id, todayStr(), data.pen_name_history || [], pen.name);
+                    const isRenaming = renamingPenId === pen.id;
+
+                    return (
+                      <tr key={pen.id} className="hover:bg-bg-farm/20">
+                        <td className="p-2.5 font-mono font-bold text-text-muted">{pen.name}</td>
+                        <td className="p-2.5 font-bold text-dark-green">
+                          {isRenaming ? (
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="text"
+                                value={newDisplayNameInput}
+                                onChange={(e) => setNewDisplayNameInput(e.target.value)}
+                                placeholder="New display name"
+                                className="bg-white border border-primary rounded px-2 py-1 text-xs font-bold text-dark-green focus:outline-none"
+                                autoFocus
+                              />
+                              <button
+                                onClick={() => handleRenamePen(pen.id, newDisplayNameInput)}
+                                disabled={savingRename}
+                                className="px-2 py-1 bg-primary text-white rounded font-bold text-[10px] hover:bg-dark-green"
+                              >
+                                {savingRename ? '...' : 'Save'}
+                              </button>
+                              <button
+                                onClick={() => setRenamingPenId(null)}
+                                className="px-1.5 py-1 text-text-muted hover:text-text-primary text-[10px]"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          ) : (
+                            <span>{currentDisplayName}</span>
+                          )}
+                        </td>
+                        <td className="p-2.5 text-center font-mono">{pen.slot_count || 15}</td>
+                        <td className="p-2.5 text-center font-mono">{pen.generation || '—'}</td>
+                        <td className="p-2.5 text-right">
+                          {!isRenaming && (
+                            <button
+                              onClick={() => {
+                                setRenamingPenId(pen.id);
+                                setNewDisplayNameInput(currentDisplayName);
+                              }}
+                              className="px-2.5 py-1 bg-white hover:bg-bg-farm border border-border-farm rounded-lg text-primary font-bold text-[11px] shadow-xs"
+                            >
+                              Rename
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="p-4 border-t border-border-farm bg-bg-farm/40 flex justify-between items-center">
+              <button
+                onClick={() => {
+                  setShowManagePens(false);
+                  setShowAddPen(true);
+                }}
+                className="flex items-center gap-1 text-primary font-bold text-xs hover:underline"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Add New Physical Pen
+              </button>
+              <button
+                onClick={() => setShowManagePens(false)}
+                className="px-4 py-2 bg-dark-green text-white font-bold rounded-lg text-xs"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 1. Add Pen Modal */}
       {showAddPen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">

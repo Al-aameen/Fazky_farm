@@ -21,7 +21,7 @@ import {
 
 export default function WorkerDashboard({ setActivePage }) {
   const { user, worker, role } = useAuth();
-  const { data, insertRecord, isOnline, ensureDateLoaded } = useData();
+  const { data, insertRecord, ensureDateLoaded } = useData();
 
   const todayStr = new Date().toISOString().split('T')[0];
 
@@ -219,13 +219,13 @@ export default function WorkerDashboard({ setActivePage }) {
         {/* Today's Eggs */}
         <div className="bg-white p-4 rounded-2xl border border-border-farm shadow-sm flex flex-col justify-between">
           <div className="flex items-center justify-between text-text-muted mb-2">
-            <span className="text-[11px] font-bold uppercase tracking-wider">Today's Eggs</span>
+            <span className="text-[11px] font-bold uppercase tracking-wider">Today's Crates</span>
             <div className="p-2 bg-amber-50 text-amber-700 rounded-xl">
               <Egg className="w-4 h-4" />
             </div>
           </div>
           <div className="text-2xl sm:text-3xl font-bold font-mono text-dark-green">
-            {todayEggs} <span className="text-xs text-text-muted font-sans">({(todayEggs / 30).toFixed(1)} crt)</span>
+            {todayEggs} <span className="text-xs text-text-muted font-sans">crates</span>
           </div>
           <span className="text-[10px] text-text-muted mt-1">Morning + Evening</span>
         </div>
@@ -516,7 +516,7 @@ export default function WorkerDashboard({ setActivePage }) {
                 </button>
                 <button
                   type="submit"
-                  disabled={submittingAdvance || !isOnline}
+                  disabled={submittingAdvance}
                   className="flex-1 bg-primary hover:bg-dark-green text-white font-bold py-2.5 rounded-xl shadow-sm transition-all disabled:opacity-50"
                 >
                   {submittingAdvance ? 'Submitting...' : 'Submit Request'}

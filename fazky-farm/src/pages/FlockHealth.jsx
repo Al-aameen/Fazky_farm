@@ -17,7 +17,8 @@ import {
   Edit3,
   Trash2,
   Check,
-  RotateCcw
+  RotateCcw,
+  AlertTriangle
 } from 'lucide-react';
 
 const DEFAULT_SCHEDULES = [
@@ -68,17 +69,20 @@ export default function FlockHealth() {
 
   const totalBirds = calculateTotalBirds();
 
-  // 2. Calculate Today's Egg Production
-  const calculateTodayEggs = () => {
+  // 2. Calculate Today's Egg Production (recorded in crates)
+  const calculateTodayCrates = () => {
     const logs = data.production_log || [];
     const dateLogs = logs.filter(l => l.date === selectedDate);
-    return dateLogs.reduce((sum, l) => sum + (parseInt(l.total_eggs) || 0), 0);
+    return dateLogs.reduce((sum, l) => sum + (Number(l.total_eggs) || (Number(l.morning_eggs) || 0) + (Number(l.evening_eggs) || 0)), 0);
   };
 
-  const todayEggs = calculateTodayEggs();
+  const todayCrates = calculateTodayCrates();
+  const todayEggsTotal = todayCrates * 30;
 
-  // 3. Calculate Laying Percentage Rate
-  const layingPercentage = totalBirds > 0 ? ((todayEggs / totalBirds) * 100).toFixed(1) : '0.0';
+  // 3. Calculate Laying Percentage Rate: (crates * 30) ÷ active_birds * 100
+  const layingPercentageNum = totalBirds > 0 ? ((todayCrates * 30) / totalBirds) * 100 : 0;
+  const isFarmLayingOver100 = layingPercentageNum > 100;
+  const layingPercentage = layingPercentageNum.toFixed(1);
 
   // 4. Calculate Today's Mortality
   const calculateTodayMortality = () => {
@@ -187,21 +191,64 @@ export default function FlockHealth() {
           
           <button
             onClick={() => {
-              const tableData = (data.pens || []).map(pen => {
-                const prodLog = (data.production_log || []).find(l => l.pen_id === pen.id && l.date === selectedDate) || {};
-                const count = (data.census_counts || [])
-                  .filter(c => c.pen_id === pen.id && c.date === selectedDate)
-                  .reduce((s, c) => s + (parseInt(c.bird_count) || 0), 0) || 40;
+              const rawPens = data.pens || [];
+              const nameHistory = data.pen_name_history || [];
+              const workerHistory = data.pen_worker_history || [];
+              const prodLogs = data.production_log || [];
+              const censusCounts = data.census_counts || [];
+              const workers = data.workers || [];
+
+              let pens = rawPens;
+              if (selectedDate >= '2026-08-13') {
+                pens = pens.filter(p => p.is_active !== false && !p.name?.toLowerCase().includes('retired'));
+              }
+
+              const validCensusDates = [...new Set(censusCounts.map(c => c.date))]
+                .filter(d => d <= selectedDate)
+                .sort((a, b) => new Date(b) - new Date(a));
+              const targetCensusDate = validCensusDates[0] || selectedDate;
+
+              const tableData = pens.map(pen => {
+                const penAssignments = workerHistory.filter(a =>
+                  a.pen_id === pen.id &&
+                  a.start_date <= selectedDate &&
+                  (!a.end_date || a.end_date >= selectedDate) &&
+                  a.worker_id &&
+                  a.worker_id !== 'unassigned'
+                );
+
+                const anyFarmAssignments = workerHistory.some(a =>
+                  a.start_date <= selectedDate &&
+                  (!a.end_date || a.end_date >= selectedDate) &&
+                  a.worker_id
+                );
+
+                const hasAssignedWorker = penAssignments.length > 0 || (!anyFarmAssignments && pen.worker_id && workers.some(w => w.id === pen.worker_id));
+                if (!hasAssignedWorker) return null;
+
+                const penDisplayName = resolvePenDisplayName(pen.id, selectedDate, nameHistory, pen.name);
+                const prodLog = (prodLogs || []).find(l => l.pen_id === pen.id && l.date === selectedDate) || {};
+                const count = (censusCounts || [])
+                  .filter(c => c.pen_id === pen.id && c.date === targetCensusDate)
+                  .reduce((s, c) => s + (parseInt(c.bird_count, 10) || 0), 0);
+
+                const crates = Number(prodLog.total_eggs) || (Number(prodLog.morning_eggs) || 0) + (Number(prodLog.evening_eggs) || 0);
+                const feed = Number(prodLog.total_feed) || (Number(prodLog.morning_feed) || 0) + (Number(prodLog.evening_feed) || 0);
+                const mort = Number(prodLog.mortality) || 0;
+                const rateNum = count > 0 ? ((crates * 30) / count) * 100 : 0;
+
                 return {
-                  pen_name: pen.name,
+                  pen_name: penDisplayName,
                   date: selectedDate,
                   active_birds: count,
-                  eggs_collected: prodLog.total_eggs || 0,
-                  feed_kg: prodLog.total_feed || 0,
-                  mortality: prodLog.mortality || 0,
-                  laying_percentage: count > 0 ? (((prodLog.total_eggs || 0) / count) * 100).toFixed(1) + '%' : '0.0%'
+                  crates_collected: crates,
+                  total_eggs_est: crates * 30,
+                  feed_bags: feed,
+                  mortality: mort,
+                  laying_percentage: count > 0 ? (rateNum > 100 ? '>100% (Check Unit)' : `${rateNum.toFixed(1)}%`) : '0.0%'
                 };
-              });
+              }).filter(Boolean);
+
               exportToExcel(`Flock_Health_${selectedDate}`, 'Flock Health', tableData);
             }}
             className="flex items-center gap-1.5 bg-white hover:bg-emerald-50 text-dark-green border border-border-farm font-bold px-3 py-1.5 rounded-xl text-xs shadow-sm transition-all"
@@ -230,7 +277,14 @@ export default function FlockHealth() {
           </div>
           <div>
             <span className="text-[10px] text-text-muted font-bold uppercase tracking-wider block">Laying Efficiency</span>
-            <span className="text-xl font-serif font-bold text-primary">{layingPercentage}%</span>
+            {isFarmLayingOver100 ? (
+              <span className="inline-flex items-center gap-1 text-red-accent font-bold text-sm" title={`Calculated ${layingPercentage}% exceeds 100%. Check data entry unit.`}>
+                <AlertTriangle className="w-4 h-4 text-red-accent shrink-0" />
+                <span>&gt;100% (Check Unit)</span>
+              </span>
+            ) : (
+              <span className="text-xl font-serif font-bold text-primary">{layingPercentage}%</span>
+            )}
           </div>
         </div>
 
@@ -250,7 +304,9 @@ export default function FlockHealth() {
           </div>
           <div>
             <span className="text-[10px] text-text-muted font-bold uppercase tracking-wider block">Daily Egg Output</span>
-            <span className="text-xl font-serif font-bold text-dark-green">{todayEggs.toLocaleString()} Eggs</span>
+            <span className="text-xl font-serif font-bold text-dark-green">
+              {todayCrates.toLocaleString()} <span className="text-xs font-sans font-normal text-text-muted">Crates</span>
+            </span>
           </div>
         </div>
       </div>
@@ -270,8 +326,8 @@ export default function FlockHealth() {
                 <tr>
                   <th className="p-3">Pen Name</th>
                   <th className="p-3 text-center">Active Birds</th>
-                  <th className="p-3 text-center">Eggs Collected</th>
-                  <th className="p-3 text-center">Feed (kg)</th>
+                  <th className="p-3 text-center">Crates Collected</th>
+                  <th className="p-3 text-center">Feed (Bags)</th>
                   <th className="p-3 text-center">Mortality</th>
                   <th className="p-3 text-right">Laying %</th>
                 </tr>
@@ -280,8 +336,10 @@ export default function FlockHealth() {
                 {(() => {
                   const rawPens = data.pens || [];
                   const nameHistory = data.pen_name_history || [];
+                  const workerHistory = data.pen_worker_history || [];
                   const prodLogs = data.production_log || [];
                   const censusCounts = data.census_counts || [];
+                  const workers = data.workers || [];
 
                   let pens = rawPens;
                   if (selectedDate >= '2026-08-13') {
@@ -293,30 +351,66 @@ export default function FlockHealth() {
                     .sort((a, b) => new Date(b) - new Date(a));
                   const targetCensusDate = validCensusDates[0] || selectedDate;
 
-                  return pens.map((pen) => {
-                    const penDisplayName = resolvePenDisplayName(pen.id, selectedDate, nameHistory, pen.name);
-                    const penLogs = prodLogs.filter(l => l.pen_id === pen.id && l.date === selectedDate);
-                    
-                    const censusCount = censusCounts
-                      .filter(c => c.pen_id === pen.id && c.date === targetCensusDate)
-                      .reduce((s, c) => s + (parseInt(c.bird_count, 10) || 0), 0);
+                  return pens
+                    .map((pen) => {
+                      const penAssignments = workerHistory.filter(a =>
+                        a.pen_id === pen.id &&
+                        a.start_date <= selectedDate &&
+                        (!a.end_date || a.end_date >= selectedDate) &&
+                        a.worker_id &&
+                        a.worker_id !== 'unassigned'
+                      );
 
-                    const eggs = penLogs.reduce((s, l) => s + (Number(l.total_eggs) || (Number(l.morning_eggs) || 0) + (Number(l.evening_eggs) || 0)), 0);
-                    const feed = penLogs.reduce((s, l) => s + (Number(l.total_feed) || (Number(l.morning_feed) || 0) + (Number(l.evening_feed) || 0)), 0);
-                    const mortality = penLogs.reduce((s, l) => s + (Number(l.mortality) || 0), 0);
-                    const rate = censusCount > 0 ? ((eggs / censusCount) * 100).toFixed(1) : '0.0';
+                      const anyFarmAssignments = workerHistory.some(a =>
+                        a.start_date <= selectedDate &&
+                        (!a.end_date || a.end_date >= selectedDate) &&
+                        a.worker_id
+                      );
 
-                    return (
-                      <tr key={pen.id} className="hover:bg-emerald-50/40 transition-colors">
-                        <td className="p-3 font-serif font-bold text-dark-green">{penDisplayName}</td>
-                        <td className="p-3 text-center font-bold">{censusCount}</td>
-                        <td className="p-3 text-center font-bold text-primary">{eggs}</td>
-                        <td className="p-3 text-center font-medium">{feed}</td>
-                        <td className="p-3 text-center font-bold text-red-accent">{mortality}</td>
-                        <td className="p-3 text-right font-bold text-dark-green font-serif">{rate}%</td>
-                      </tr>
-                    );
-                  });
+                      const hasAssignedWorker = penAssignments.length > 0 || (!anyFarmAssignments && pen.worker_id && workers.some(w => w.id === pen.worker_id));
+
+                      // Filter out pens with no assigned workers on this date
+                      if (!hasAssignedWorker) {
+                        return null;
+                      }
+
+                      const penDisplayName = resolvePenDisplayName(pen.id, selectedDate, nameHistory, pen.name);
+                      const penLogs = prodLogs.filter(l => l.pen_id === pen.id && l.date === selectedDate);
+                      
+                      const censusCount = censusCounts
+                        .filter(c => c.pen_id === pen.id && c.date === targetCensusDate)
+                        .reduce((s, c) => s + (parseInt(c.bird_count, 10) || 0), 0);
+
+                      const crates = penLogs.reduce((s, l) => s + (Number(l.total_eggs) || (Number(l.morning_eggs) || 0) + (Number(l.evening_eggs) || 0)), 0);
+                      const feed = penLogs.reduce((s, l) => s + (Number(l.total_feed) || (Number(l.morning_feed) || 0) + (Number(l.evening_feed) || 0)), 0);
+                      const mortality = penLogs.reduce((s, l) => s + (Number(l.mortality) || 0), 0);
+                      
+                      // (crates * 30) ÷ active_birds * 100
+                      const rateNum = censusCount > 0 ? ((crates * 30) / censusCount) * 100 : 0;
+                      const isOver100 = rateNum > 100;
+                      const rate = rateNum.toFixed(1);
+
+                      return (
+                        <tr key={pen.id} className="hover:bg-emerald-50/40 transition-colors">
+                          <td className="p-3 font-serif font-bold text-dark-green">{penDisplayName}</td>
+                          <td className="p-3 text-center font-bold">{censusCount.toLocaleString()}</td>
+                          <td className="p-3 text-center font-bold text-primary">{crates.toLocaleString()}</td>
+                          <td className="p-3 text-center font-medium">{feed.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
+                          <td className="p-3 text-center font-bold text-red-accent">{mortality}</td>
+                          <td className="p-3 text-right font-bold text-dark-green font-serif">
+                            {isOver100 ? (
+                              <span className="inline-flex items-center gap-1 text-red-accent font-sans text-xs" title={`Calculated ${rate}% exceeds 100%. Check data entry.`}>
+                                <AlertTriangle className="w-3.5 h-3.5 text-red-accent shrink-0" />
+                                <span>&gt;100%</span>
+                              </span>
+                            ) : (
+                              `${rate}%`
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                    .filter(Boolean);
                 })()}
               </tbody>
             </table>

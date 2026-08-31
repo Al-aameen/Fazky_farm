@@ -29,7 +29,7 @@ import {
 
 export default function MainLayout({ activePage, setActivePage, children }) {
   const { user, role, worker, logout } = useAuth();
-  const { isOnline } = useData();
+  const { data = {}, isOnline } = useData();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 
@@ -61,10 +61,10 @@ export default function MainLayout({ activePage, setActivePage, children }) {
     { id: 'dashboard',        label: 'Dashboard',         icon: LayoutDashboard,   roles: ['admin', 'manager'] },
     
     // Core Daily Operations
-    { id: 'production',       label: 'Production Log',    icon: ClipboardList,     roles: ['admin', 'manager', 'staff'] },
-    { id: 'census',           label: 'Bird Census',       icon: Grid,              roles: ['admin', 'manager', 'staff'] },
-    { id: 'flockhealth',      label: 'Flock Health',      icon: Activity,          roles: ['admin', 'manager', 'staff'] },
-    { id: 'flocklifecycle',   label: 'Flock Lifecycle',   icon: Egg,               roles: ['admin', 'manager'] },
+    { id: 'production',       label: 'Production Log',    icon: ClipboardList,     roles: ['admin', 'manager', 'staff', 'veterinary'] },
+    { id: 'census',           label: 'Bird Census',       icon: Grid,              roles: ['admin', 'manager', 'staff', 'veterinary'] },
+    { id: 'flockhealth',      label: 'Flock Health',      icon: Activity,          roles: ['admin', 'manager', 'staff', 'veterinary'] },
+    { id: 'flocklifecycle',   label: 'Flock Lifecycle',   icon: Egg,               roles: ['admin', 'manager', 'veterinary'] },
     
     // Unified Feed & Procurement Hub (Item XI)
     { id: 'procurement',      label: 'Feed & Stock Hub',  icon: Package,           roles: ['admin', 'manager', 'staff'] },
@@ -83,8 +83,23 @@ export default function MainLayout({ activePage, setActivePage, children }) {
     { id: 'settings',         label: 'Settings',          icon: SettingsIcon,      roles: ['admin', 'manager'] },
   ];
 
-  // Filter items by current user's role
-  const visibleNavItems = navItems.filter(item => item.roles.includes(role || 'staff'));
+  // Permissions lookup for current worker (E4)
+  const userModulePermissions = (data.worker_module_permissions || [])
+    .filter(p => p.worker_id === worker?.id)
+    .reduce((acc, p) => {
+      acc[p.module_id] = p.access_level;
+      return acc;
+    }, {});
+
+  // Filter items by current user's role and granular module permissions
+  const visibleNavItems = navItems.filter(item => {
+    if (role === 'admin') return true;
+    const customAccess = userModulePermissions[item.id];
+    if (customAccess !== undefined) {
+      return customAccess !== 'none';
+    }
+    return item.roles.includes(role || 'staff');
+  });
 
   const handleNavClick = (id) => {
     setActivePage(id);

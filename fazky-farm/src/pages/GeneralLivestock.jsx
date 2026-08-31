@@ -34,7 +34,7 @@ const LIVESTOCK_CATEGORIES = [
 ];
 
 export default function GeneralLivestock() {
-  const { data, insertRecord, updateRecord, deleteRecord, isOnline } = useData();
+  const { data, insertRecord, updateRecord, deleteRecord } = useData();
   const { role } = useAuth();
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -552,7 +552,7 @@ export default function GeneralLivestock() {
                 </button>
                 <button
                   type="submit"
-                  disabled={submitting || !isOnline}
+                  disabled={submitting}
                   className="flex-1 bg-primary hover:bg-dark-green text-white font-bold py-2.5 rounded-xl shadow-sm transition-all disabled:opacity-50"
                 >
                   {submitting ? 'Saving...' : 'Save Record'}

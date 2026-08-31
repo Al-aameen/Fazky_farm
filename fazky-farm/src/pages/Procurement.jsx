@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { useData } from '../hooks/useData';
 import { useAuth } from '../context/AuthContext';
 import DatePicker from '../components/DatePicker';
-import { exportToExcel } from '../lib/csvExportImport';
+import { exportToExcel, parseImportFile } from '../lib/csvExportImport';
 import { 
   Package, 
   Boxes, 
@@ -34,8 +34,17 @@ const TABS = [
   { id: 'logs',       label: 'Movement Ledger',           icon: History },
 ];
 
+const normalizeDecimal = (val) => {
+  if (typeof val !== 'string') return val;
+  let trimmed = val.trim();
+  if (trimmed === '' || trimmed === '-') return '';
+  if (trimmed.startsWith('.')) return '0' + trimmed;
+  if (trimmed.startsWith('-.')) return '-0' + trimmed.slice(1);
+  return trimmed;
+};
+
 export default function Procurement() {
-  const { data, insertRecord, updateRecord, deleteRecord, isOnline } = useData();
+  const { data, insertRecord, updateRecord, deleteRecord } = useData();
   const { role, worker } = useAuth();
   const canEdit = role === 'admin' || role === 'manager';
 
@@ -48,6 +57,7 @@ export default function Procurement() {
   const [showProductionModal, setShowProductionModal] = useState(false);
   const [showRestockModal, setShowRestockModal] = useState(false);
   const [selectedStockItem, setSelectedStockItem] = useState(null);
+  const maizeImportRef = useRef(null);
 
   // ── Multi-Bag Maize Grid Form State (Item X & XVII) ──
   const [mzDate, setMzDate] = useState(new Date().toISOString().split('T')[0]);
@@ -86,11 +96,25 @@ export default function Procurement() {
   const [adjustNotes, setAdjustNotes] = useState('');
   const [adjustSubmitting, setAdjustSubmitting] = useState(false);
 
+  // ── Shared error banner state ──
+  const [errorMessage, setErrorMessage] = useState(null);
+
   // Data lists
   const feedInventory = data.feed_inventory || [];
   const maizeRecords = data.maize_records || [];
   const feedProduction = data.feed_production || [];
   const inventoryLogs = data.feed_inventory_log || [];
+
+  // Group inventory strictly by item_type (Item 3)
+  const finishedFeeds = feedInventory.filter(fi => 
+    fi.item_type === 'finished_feed' || 
+    (!fi.item_type && ['Layers Mash', 'Layers Feed', 'Grower Mash', 'Chick Mash'].some(name => fi.item_name.toLowerCase().includes(name.toLowerCase())))
+  );
+
+  const rawMaterials = feedInventory.filter(fi => 
+    fi.item_type === 'raw_material' || 
+    (!fi.item_type && !finishedFeeds.some(f => f.id === fi.id))
+  );
 
   // Maize Grid Computations
   const totalMaizeKg = mzBagWeights.reduce((sum, w) => sum + (parseFloat(w) || 0), 0);
@@ -116,6 +140,66 @@ export default function Procurement() {
     });
   };
 
+  // Handle Maize CSV Import (J3)
+  const handleMaizeCsvImport = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const rows = await parseImportFile(file);
+      const recordsToInsert = [];
+      for (const r of rows) {
+        const kg = parseFloat(r.kg_procured || r.kg || r.quantity || r.weight || 0);
+        const bags = parseInt(r.bag_number || r.bags || 0) || Math.round(kg / 50);
+        const amount = parseFloat(r.total_amount || r.amount || r.total || r.cost || 0);
+        const seller = (r.seller_name || r.seller || r.vendor || 'Maize Supplier').trim();
+        const date = r.date || new Date().toISOString().split('T')[0];
+
+        if (kg > 0) {
+          recordsToInsert.push({
+            date,
+            seller_name: seller,
+            kg_procured: kg,
+            bag_number: bags,
+            total_amount: amount,
+            notes: r.notes || r.remarks || 'CSV Import'
+          });
+        }
+      }
+
+      if (recordsToInsert.length > 0) {
+        await insertRecord('maize_records', recordsToInsert[0]); // or bulk insert if multiple
+        for (let i = 1; i < recordsToInsert.length; i++) {
+          await insertRecord('maize_records', recordsToInsert[i]);
+        }
+
+        // Update maize inventory
+        const totalImportedKg = recordsToInsert.reduce((sum, r) => sum + r.kg_procured, 0);
+        const maizeInv = feedInventory.find(fi => fi.item_name.toLowerCase().includes('maize'));
+        if (maizeInv) {
+          await updateRecord('feed_inventory', {
+            id: maizeInv.id,
+            current_stock: Number(maizeInv.current_stock || 0) + totalImportedKg,
+            last_updated: new Date().toISOString()
+          });
+          await insertRecord('feed_inventory_log', {
+            inventory_id: maizeInv.id,
+            date: new Date().toISOString().split('T')[0],
+            change_amount: totalImportedKg,
+            change_type: 'restock',
+            source: 'Maize CSV Import',
+            notes: `Imported ${recordsToInsert.length} maize procurement batches (${totalImportedKg.toLocaleString()} kg)`
+          });
+        }
+        alert(`✅ Imported ${recordsToInsert.length} maize procurement records successfully (${totalImportedKg.toLocaleString()} kg added to stock).`);
+      }
+    } catch (err) {
+      console.error('Maize CSV import error:', err);
+      alert('❌ Import failed: ' + err.message);
+    } finally {
+      e.target.value = '';
+    }
+  };
+
   // Submit Maize Purchase with Multi-Bag Grid
   const handleSaveMaizePurchase = async (e) => {
     e.preventDefault();
@@ -125,6 +209,7 @@ export default function Procurement() {
     }
 
     setMzSubmitting(true);
+    setErrorMessage(null);
     try {
       // 1. Insert into maize_records
       await insertRecord('maize_records', {
@@ -177,7 +262,7 @@ export default function Procurement() {
       setMzBagWeights([50, 50, 50, 50, 50]);
     } catch (err) {
       console.error('Failed to log maize purchase:', err);
-      alert('Error: ' + err.message);
+      setErrorMessage(err?.message || 'Failed to log maize purchase.');
     } finally {
       setMzSubmitting(false);
     }
@@ -196,6 +281,7 @@ export default function Procurement() {
     }
 
     setFfSubmitting(true);
+    setErrorMessage(null);
     try {
       const feedCost = bags * costPerBag;
       const grandTotal = feedCost + transport;
@@ -239,7 +325,7 @@ export default function Procurement() {
       setFfTransport('');
     } catch (err) {
       console.error('Failed to log finished feed purchase:', err);
-      alert('Error: ' + err.message);
+      setErrorMessage(err?.message || 'Failed to log finished feed purchase.');
     } finally {
       setFfSubmitting(false);
     }
@@ -248,50 +334,30 @@ export default function Procurement() {
   // Submit In-House Feed Production
   const handleSaveProduction = async (e) => {
     e.preventDefault();
-    const produced = parseInt(prodBagsProduced) || 0;
+    const produced = parseFloat(prodBagsProduced) || 0;
     if (produced <= 0) {
       alert('Please enter number of bags produced.');
       return;
     }
 
+    const maizeKg = parseFloat(prodMaizeKg) || 0;
+    const wheatBags = parseFloat(prodWheatBags) || 0;
+    const concBags = parseFloat(prodConcBags) || 0;
+    const premixKg = parseFloat(prodPremixKg) || 0;
+
     setProdSubmitting(true);
+    setErrorMessage(null);
     try {
-      // 1. Log to feed_production
+      // 1. Log to feed_production (Database trigger handle_feed_milling_deduction handles automatic inventory updates and movement logs)
       await insertRecord('feed_production', {
         date: prodDate,
-        maize_kg: parseFloat(prodMaizeKg) || 0,
-        wheat_offal_bags: parseInt(prodWheatBags) || 0,
-        concentrate_bags: parseInt(prodConcBags) || 0,
-        premix_qty: parseFloat(prodPremixKg) || 0,
+        maize_kg: maizeKg,
+        wheat_offal_bags: wheatBags,
+        concentrate_bags: concBags,
+        premix_qty: premixKg,
         feed_produced_tonnes: (produced * 25) / 1000,
         bags_produced: produced
       });
-
-      // 2. Restock Produced Finished Feed
-      const finishedInv = feedInventory.find(fi => fi.item_name.toLowerCase().includes(prodTargetFeed.toLowerCase()));
-      if (finishedInv) {
-        await updateRecord('feed_inventory', {
-          id: finishedInv.id,
-          current_stock: Number(finishedInv.current_stock || 0) + produced,
-          last_updated: new Date().toISOString()
-        });
-
-        await insertRecord('feed_inventory_log', {
-          inventory_id: finishedInv.id,
-          date: prodDate,
-          change_amount: produced,
-          change_type: 'production',
-          source: 'In-House Feed Milling',
-          notes: `Produced ${produced} bags (${prodTargetFeed}) from raw ingredients`
-        });
-      }
-
-      // 3. Deduct Raw Ingredients from feed_inventory
-      const maizeInv = feedInventory.find(fi => fi.item_name.toLowerCase().includes('maize'));
-      if (maizeInv && parseFloat(prodMaizeKg) > 0) {
-        const remaining = Math.max(0, Number(maizeInv.current_stock || 0) - parseFloat(prodMaizeKg));
-        await updateRecord('feed_inventory', { id: maizeInv.id, current_stock: remaining });
-      }
 
       setShowProductionModal(false);
       setProdMaizeKg('');
@@ -301,7 +367,7 @@ export default function Procurement() {
       setProdBagsProduced('');
     } catch (err) {
       console.error('Failed to log feed milling:', err);
-      alert('Error: ' + err.message);
+      setErrorMessage(err?.message || 'Failed to log feed milling.');
     } finally {
       setProdSubmitting(false);
     }
@@ -312,6 +378,7 @@ export default function Procurement() {
     e.preventDefault();
     if (!selectedStockItem || !adjustQty) return;
     setAdjustSubmitting(true);
+    setErrorMessage(null);
     try {
       const qty = parseFloat(adjustQty);
       const newStock = adjustType === 'restock'
@@ -339,7 +406,7 @@ export default function Procurement() {
       setAdjustNotes('');
     } catch (err) {
       console.error('Stock adjust error:', err);
-      alert('Error: ' + err.message);
+      setErrorMessage(err?.message || 'Failed to save stock adjustment.');
     } finally {
       setAdjustSubmitting(false);
     }
@@ -347,6 +414,18 @@ export default function Procurement() {
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12">
+      {/* Error Banner */}
+      {errorMessage && (
+        <div role="alert" className="flex items-start gap-3 bg-red-50 border border-red-300 rounded-2xl px-5 py-4 text-xs text-red-800 font-sans shadow-sm">
+          <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-bold text-red-800">Save failed — your data is still on screen</p>
+            <p className="mt-0.5 text-red-700">{errorMessage}</p>
+          </div>
+          <button onClick={() => setErrorMessage(null)} className="shrink-0 text-red-500 hover:text-red-700 font-bold text-xs">Dismiss</button>
+        </div>
+      )}
+
       {/* ── Top Header ── */}
       <div className="bg-white p-5 sm:p-6 rounded-3xl border border-border-farm shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
@@ -431,7 +510,7 @@ export default function Procurement() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {feedInventory.filter(fi => ['Chick Mash', 'Grower Mash', 'Layers Mash'].some(name => fi.item_name.includes(name))).map(item => {
+              {finishedFeeds.map(item => {
                 const stock = Number(item.current_stock) || 0;
                 const isLow = stock <= (Number(item.low_stock_threshold) || 10);
                 return (
@@ -480,12 +559,12 @@ export default function Procurement() {
                   <Wheat className="w-5 h-5 text-primary" />
                   <span>Raw Formulation Ingredients</span>
                 </h3>
-                <p className="text-[11px] text-text-muted">Maize, Wheat Offal, Concentrate, Premix, Limestone for on-farm feed mixing</p>
+                <p className="text-[11px] text-text-muted">Maize, Wheat Offal, Concentrate, Premix for on-farm feed mixing</p>
               </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {feedInventory.filter(fi => !['Chick Mash', 'Grower Mash', 'Layers Mash'].some(name => fi.item_name.includes(name))).map(item => {
+              {rawMaterials.map(item => {
                 const stock = Number(item.current_stock) || 0;
                 return (
                   <div key={item.id} className="p-4 bg-bg-farm rounded-2xl border border-border-farm space-y-2.5 flex flex-col justify-between">
@@ -527,13 +606,32 @@ export default function Procurement() {
               <p className="text-xs text-text-muted">Grain purchases with total kg procured, bag counts, and average weight/bag.</p>
             </div>
             {canEdit && (
-              <button
-                onClick={() => setShowMaizeGridModal(true)}
-                className="bg-primary hover:bg-dark-green text-white font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition-all self-start sm:self-auto"
-              >
-                <Calculator className="w-4 h-4" />
-                <span>+ Log Maize Purchase Grid</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <input
+                  type="file"
+                  ref={maizeImportRef}
+                  className="hidden"
+                  accept=".csv,.xlsx,.xls"
+                  onChange={handleMaizeCsvImport}
+                />
+                <button
+                  type="button"
+                  onClick={() => maizeImportRef.current?.click()}
+                  className="bg-white hover:bg-blue-50 text-dark-green font-bold px-3.5 py-2 rounded-xl text-xs border border-border-farm flex items-center gap-1.5 shadow-xs transition-all"
+                  title="Import historical or supplier maize procurement CSV"
+                >
+                  <span className="text-blue-600 font-bold">↑</span>
+                  <span>Import Maize CSV</span>
+                </button>
+
+                <button
+                  onClick={() => setShowMaizeGridModal(true)}
+                  className="bg-primary hover:bg-dark-green text-white font-bold px-4 py-2 rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition-all self-start sm:self-auto"
+                >
+                  <Calculator className="w-4 h-4" />
+                  <span>+ Log Maize Purchase Grid</span>
+                </button>
+              </div>
             )}
           </div>
 
@@ -794,11 +892,11 @@ export default function Procurement() {
                         Bag #{idx + 1} (kg)
                       </label>
                       <input
-                        type="number"
-                        min="1"
-                        step="0.1"
+                        type="text"
+                        inputMode="decimal"
                         value={weight}
                         onChange={(e) => handleUpdateBagWeight(idx, e.target.value)}
+                        onBlur={() => handleUpdateBagWeight(idx, normalizeDecimal(mzBagWeights[idx]))}
                         className="w-full bg-white border border-border-farm rounded-xl p-2 text-xs font-bold font-mono text-center focus:ring-2 focus:ring-accent focus:outline-none"
                       />
                       {mzBagWeights.length > 1 && (
@@ -839,12 +937,12 @@ export default function Procurement() {
                     Grain Price / kg (₦)
                   </label>
                   <input
-                    type="number"
-                    min="0"
-                    step="1"
+                    type="text"
+                    inputMode="decimal"
                     placeholder="e.g. 850"
                     value={mzPricePerKg}
                     onChange={(e) => setMzPricePerKg(e.target.value)}
+                    onBlur={() => setMzPricePerKg(normalizeDecimal(mzPricePerKg))}
                     className="w-full bg-bg-farm border border-border-farm rounded-xl px-3 py-2 text-xs font-bold font-mono focus:ring-2 focus:ring-accent focus:outline-none"
                   />
                 </div>
@@ -854,11 +952,12 @@ export default function Procurement() {
                     Transport Cost (₦)
                   </label>
                   <input
-                    type="number"
-                    min="0"
+                    type="text"
+                    inputMode="decimal"
                     placeholder="e.g. 15000"
                     value={mzTransportCost}
                     onChange={(e) => setMzTransportCost(e.target.value)}
+                    onBlur={() => setMzTransportCost(normalizeDecimal(mzTransportCost))}
                     className="w-full bg-bg-farm border border-border-farm rounded-xl px-3 py-2 text-xs font-bold font-mono focus:ring-2 focus:ring-accent focus:outline-none"
                   />
                 </div>
@@ -868,11 +967,12 @@ export default function Procurement() {
                     Offloading / Misc (₦)
                   </label>
                   <input
-                    type="number"
-                    min="0"
+                    type="text"
+                    inputMode="decimal"
                     placeholder="e.g. 5000"
                     value={mzHandlingCost}
                     onChange={(e) => setMzHandlingCost(e.target.value)}
+                    onBlur={() => setMzHandlingCost(normalizeDecimal(mzHandlingCost))}
                     className="w-full bg-bg-farm border border-border-farm rounded-xl px-3 py-2 text-xs font-bold font-mono focus:ring-2 focus:ring-accent focus:outline-none"
                   />
                 </div>
@@ -906,7 +1006,7 @@ export default function Procurement() {
                 </button>
                 <button
                   type="submit"
-                  disabled={mzSubmitting || !isOnline}
+                  disabled={mzSubmitting}
                   className="flex-1 bg-primary hover:bg-dark-green text-white font-bold py-2.5 rounded-xl shadow-sm transition-all disabled:opacity-50"
                 >
                   {mzSubmitting ? 'Saving...' : 'Save Maize Purchase'}
@@ -985,11 +1085,12 @@ export default function Procurement() {
                     Quantity (Bags) *
                   </label>
                   <input
-                    type="number"
+                    type="text"
+                    inputMode="decimal"
                     required
-                    min="1"
                     value={ffBags}
                     onChange={(e) => setFfBags(e.target.value)}
+                    onBlur={() => setFfBags(normalizeDecimal(ffBags))}
                     placeholder="e.g. 50"
                     className="w-full bg-bg-farm border border-border-farm rounded-xl px-3.5 py-2 text-xs font-bold font-mono focus:ring-2 focus:ring-accent focus:outline-none"
                   />
@@ -1000,11 +1101,12 @@ export default function Procurement() {
                     Cost per Bag (₦) *
                   </label>
                   <input
-                    type="number"
+                    type="text"
+                    inputMode="decimal"
                     required
-                    min="1"
                     value={ffCostPerBag}
                     onChange={(e) => setFfCostPerBag(e.target.value)}
+                    onBlur={() => setFfCostPerBag(normalizeDecimal(ffCostPerBag))}
                     placeholder="e.g. 14500"
                     className="w-full bg-bg-farm border border-border-farm rounded-xl px-3.5 py-2 text-xs font-bold font-mono focus:ring-2 focus:ring-accent focus:outline-none"
                   />
@@ -1016,10 +1118,11 @@ export default function Procurement() {
                   Transport / Delivery (₦)
                 </label>
                 <input
-                  type="number"
-                  min="0"
+                  type="text"
+                  inputMode="decimal"
                   value={ffTransport}
                   onChange={(e) => setFfTransport(e.target.value)}
+                  onBlur={() => setFfTransport(normalizeDecimal(ffTransport))}
                   placeholder="0"
                   className="w-full bg-bg-farm border border-border-farm rounded-xl px-3.5 py-2 text-xs font-bold font-mono focus:ring-2 focus:ring-accent focus:outline-none"
                 />
@@ -1054,7 +1157,7 @@ export default function Procurement() {
                 </button>
                 <button
                   type="submit"
-                  disabled={ffSubmitting || !isOnline}
+                  disabled={ffSubmitting}
                   className="flex-1 bg-primary hover:bg-dark-green text-white font-bold py-2.5 rounded-xl shadow-sm transition-all"
                 >
                   {ffSubmitting ? 'Saving...' : 'Save & Restock'}
@@ -1117,11 +1220,12 @@ export default function Procurement() {
                 <div>
                   <label className="block text-[9px] text-text-muted uppercase font-bold mb-0.5">Maize Used (kg)</label>
                   <input
-                    type="number"
-                    min="0"
-                    placeholder="e.g. 500"
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="e.g. 450"
                     value={prodMaizeKg}
                     onChange={(e) => setProdMaizeKg(e.target.value)}
+                    onBlur={() => setProdMaizeKg(normalizeDecimal(prodMaizeKg))}
                     className="w-full bg-white border border-border-farm rounded-lg p-2 text-xs font-bold font-mono focus:outline-none"
                   />
                 </div>
@@ -1129,11 +1233,12 @@ export default function Procurement() {
                 <div>
                   <label className="block text-[9px] text-text-muted uppercase font-bold mb-0.5">Wheat Offal (bags)</label>
                   <input
-                    type="number"
-                    min="0"
-                    placeholder="e.g. 6"
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="e.g. 7.5"
                     value={prodWheatBags}
                     onChange={(e) => setProdWheatBags(e.target.value)}
+                    onBlur={() => setProdWheatBags(normalizeDecimal(prodWheatBags))}
                     className="w-full bg-white border border-border-farm rounded-lg p-2 text-xs font-bold font-mono focus:outline-none"
                   />
                 </div>
@@ -1141,11 +1246,12 @@ export default function Procurement() {
                 <div>
                   <label className="block text-[9px] text-text-muted uppercase font-bold mb-0.5">Concentrate (bags)</label>
                   <input
-                    type="number"
-                    min="0"
-                    placeholder="e.g. 4"
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="e.g. 4.5"
                     value={prodConcBags}
                     onChange={(e) => setProdConcBags(e.target.value)}
+                    onBlur={() => setProdConcBags(normalizeDecimal(prodConcBags))}
                     className="w-full bg-white border border-border-farm rounded-lg p-2 text-xs font-bold font-mono focus:outline-none"
                   />
                 </div>
@@ -1153,11 +1259,12 @@ export default function Procurement() {
                 <div>
                   <label className="block text-[9px] text-text-muted uppercase font-bold mb-0.5">Premix / Additives (kg)</label>
                   <input
-                    type="number"
-                    min="0"
+                    type="text"
+                    inputMode="decimal"
                     placeholder="e.g. 2.5"
                     value={prodPremixKg}
                     onChange={(e) => setProdPremixKg(e.target.value)}
+                    onBlur={() => setProdPremixKg(normalizeDecimal(prodPremixKg))}
                     className="w-full bg-white border border-border-farm rounded-lg p-2 text-xs font-bold font-mono focus:outline-none"
                   />
                 </div>
@@ -1168,12 +1275,13 @@ export default function Procurement() {
                   Finished Bags Produced (25kg/bag) *
                 </label>
                 <input
-                  type="number"
+                  type="text"
+                  inputMode="decimal"
                   required
-                  min="1"
                   placeholder="e.g. 40"
                   value={prodBagsProduced}
                   onChange={(e) => setProdBagsProduced(e.target.value)}
+                  onBlur={() => setProdBagsProduced(normalizeDecimal(prodBagsProduced))}
                   className="w-full bg-bg-farm border border-border-farm rounded-xl px-3.5 py-2 text-sm font-bold font-mono text-dark-green focus:ring-2 focus:ring-accent focus:outline-none"
                 />
               </div>
@@ -1188,7 +1296,7 @@ export default function Procurement() {
                 </button>
                 <button
                   type="submit"
-                  disabled={prodSubmitting || !isOnline}
+                  disabled={prodSubmitting}
                   className="flex-1 bg-primary hover:bg-dark-green text-white font-bold py-2.5 rounded-xl shadow-sm transition-all"
                 >
                   {prodSubmitting ? 'Saving...' : 'Save Production Batch'}
@@ -1243,12 +1351,12 @@ export default function Procurement() {
                   Quantity ({selectedStockItem.unit || 'bags'}) *
                 </label>
                 <input
-                  type="number"
+                  type="text"
+                  inputMode="decimal"
                   required
-                  min="0.1"
-                  step="any"
                   value={adjustQty}
                   onChange={(e) => setAdjustQty(e.target.value)}
+                  onBlur={() => setAdjustQty(normalizeDecimal(adjustQty))}
                   placeholder="e.g. 20"
                   className="w-full bg-bg-farm border border-border-farm rounded-xl px-3.5 py-2 text-sm font-bold font-mono focus:outline-none"
                 />
@@ -1277,7 +1385,7 @@ export default function Procurement() {
                 </button>
                 <button
                   type="submit"
-                  disabled={adjustSubmitting || !isOnline}
+                  disabled={adjustSubmitting}
                   className="flex-1 bg-primary hover:bg-dark-green text-white font-bold py-2.5 rounded-xl shadow-sm transition-all"
                 >
                   {adjustSubmitting ? 'Updating...' : 'Save Stock'}

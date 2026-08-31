@@ -548,10 +548,10 @@ The image contains a mixture of structured matrices (grids) and unstructured mar
                     <table className="w-full border-collapse text-left text-xs">
                       <thead>
                         <tr className="bg-dark-green text-white font-serif text-[11px] uppercase tracking-wider">
-                          <th className="p-2.5 border-r border-white/10">Block & Worker</th>
-                          <th className="p-2.5 border-r border-white/10 text-center w-16">Morn Egg</th>
-                          <th className="p-2.5 border-r border-white/10 text-center w-16">Eve Egg</th>
-                          <th className="p-2.5 border-r border-white/10 text-center w-20 bg-[#1e421a]/80">Total Egg</th>
+                          <th className="p-2.5 border-r border-white/10">Block &amp; Worker</th>
+                          <th className="p-2.5 border-r border-white/10 text-center w-16">Morn Crates</th>
+                          <th className="p-2.5 border-r border-white/10 text-center w-16">Eve Crates</th>
+                          <th className="p-2.5 border-r border-white/10 text-center w-20 bg-[#1e421a]/80">Total Crates</th>
                           <th className="p-2.5 border-r border-white/10 text-center w-16">Morn Feed</th>
                           <th className="p-2.5 border-r border-white/10 text-center w-16">Eve Feed</th>
                           <th className="p-2.5 border-r border-white/10 text-center w-20 bg-[#1e421a]/80">Total Feed</th>

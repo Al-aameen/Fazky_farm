@@ -112,6 +112,7 @@ CREATE TABLE IF NOT EXISTS general_census (
 CREATE TABLE IF NOT EXISTS production_log (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   pen_id UUID NOT NULL REFERENCES pens(id) ON DELETE CASCADE,
+  worker_id UUID REFERENCES workers(id) ON DELETE SET NULL,
   date DATE NOT NULL,
   day_of_week TEXT NOT NULL,
   morning_eggs INT NOT NULL DEFAULT 0 CHECK (morning_eggs >= 0),
@@ -122,7 +123,7 @@ CREATE TABLE IF NOT EXISTS production_log (
   total_feed NUMERIC GENERATED ALWAYS AS (morning_feed + evening_feed) STORED,
   mortality INT NOT NULL DEFAULT 0 CHECK (mortality >= 0),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(pen_id, date)
+  CONSTRAINT prod_unique_pen_worker_date UNIQUE (pen_id, worker_id, date)
 );
 
 -- 7. Sales Log Table
@@ -227,15 +228,18 @@ CREATE TABLE IF NOT EXISTS off_pays (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 15. Feed Inventory Table (Phase 2)
+-- 15. Feed Inventory Table (Phase 2 - Two-Tier Model D1)
 CREATE TABLE IF NOT EXISTS feed_inventory (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   item_name TEXT UNIQUE NOT NULL,
+  item_type TEXT NOT NULL DEFAULT 'raw_material' CHECK (item_type IN ('raw_material', 'finished_feed')),
   unit TEXT NOT NULL, -- e.g. kg, bags
   current_stock NUMERIC NOT NULL DEFAULT 0,
   low_stock_threshold NUMERIC NOT NULL DEFAULT 0,
   last_updated TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- Additive patch for existing databases
+ALTER TABLE feed_inventory ADD COLUMN IF NOT EXISTS item_type TEXT NOT NULL DEFAULT 'raw_material' CHECK (item_type IN ('raw_material', 'finished_feed'));
 
 -- 16. Feed Inventory Log Table (Phase 2)
 CREATE TABLE IF NOT EXISTS feed_inventory_log (
@@ -248,6 +252,246 @@ CREATE TABLE IF NOT EXISTS feed_inventory_log (
   notes TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- D2: Feed milling deduction trigger on feed_production (Supports INSERT, UPDATE deltas, DELETE reversals)
+CREATE OR REPLACE FUNCTION public.handle_feed_milling_deduction()
+RETURNS TRIGGER AS $$
+DECLARE
+  v_maize_id UUID;
+  v_wheat_id UUID;
+  v_conc_id  UUID;
+  v_premix_id UUID;
+  v_layers_id UUID;
+  
+  v_d_maize NUMERIC := 0;
+  v_d_wheat NUMERIC := 0;
+  v_d_conc  NUMERIC := 0;
+  v_d_premix NUMERIC := 0;
+  v_d_bags   NUMERIC := 0;
+  v_eff_date DATE;
+  v_tonnes   NUMERIC := 0;
+BEGIN
+  -- Resolve inventory item UUIDs
+  SELECT id INTO v_maize_id FROM public.feed_inventory WHERE item_name ILIKE 'Maize%' OR item_name ILIKE '%Maize%' LIMIT 1;
+  SELECT id INTO v_wheat_id FROM public.feed_inventory WHERE item_name ILIKE 'Wheat Offal%' OR item_name ILIKE '%Wheat%' LIMIT 1;
+  SELECT id INTO v_conc_id  FROM public.feed_inventory WHERE item_name ILIKE 'Concentrate%' OR item_name ILIKE '%Concentrate%' LIMIT 1;
+  SELECT id INTO v_premix_id FROM public.feed_inventory WHERE item_name ILIKE 'Premix%' OR item_name ILIKE '%Premix%' LIMIT 1;
+  SELECT id INTO v_layers_id FROM public.feed_inventory WHERE (item_type = 'finished_feed' AND item_name ILIKE '%Layers%') OR item_name ILIKE '%Layers%' LIMIT 1;
+  
+  -- Fallback for finished feed if Layers not found
+  IF v_layers_id IS NULL THEN
+    SELECT id INTO v_layers_id FROM public.feed_inventory WHERE item_type = 'finished_feed' LIMIT 1;
+  END IF;
+
+  -- ── CASE 1: INSERT ──────────────────────────────────────────────────────────
+  IF TG_OP = 'INSERT' THEN
+    v_eff_date := NEW.date;
+    v_d_maize  := COALESCE(NEW.maize_kg, 0);
+    v_d_wheat  := COALESCE(NEW.wheat_offal_bags, 0);
+    v_d_conc   := COALESCE(NEW.concentrate_bags, 0);
+    v_d_premix := COALESCE(NEW.premix_qty, 0);
+    v_d_bags   := COALESCE(NEW.bags_produced, 0);
+    v_tonnes   := COALESCE(NEW.feed_produced_tonnes, (v_d_bags * 25.0) / 1000.0);
+
+    -- 1. Deduct Maize
+    IF v_d_maize > 0 AND v_maize_id IS NOT NULL THEN
+      UPDATE public.feed_inventory
+      SET current_stock = GREATEST(0, current_stock - v_d_maize),
+          last_updated = NOW()
+      WHERE id = v_maize_id;
+
+      INSERT INTO public.feed_inventory_log (inventory_id, date, change_amount, change_type, source, notes)
+      VALUES (v_maize_id, v_eff_date, -v_d_maize, 'consumption', 'feed_milling', 'Milled feed batch: used ' || v_d_maize || ' kg maize');
+    END IF;
+
+    -- 2. Deduct Wheat Offal
+    IF v_d_wheat > 0 AND v_wheat_id IS NOT NULL THEN
+      UPDATE public.feed_inventory
+      SET current_stock = GREATEST(0, current_stock - v_d_wheat),
+          last_updated = NOW()
+      WHERE id = v_wheat_id;
+
+      INSERT INTO public.feed_inventory_log (inventory_id, date, change_amount, change_type, source, notes)
+      VALUES (v_wheat_id, v_eff_date, -v_d_wheat, 'consumption', 'feed_milling', 'Milled feed batch: used ' || v_d_wheat || ' bags wheat offal');
+    END IF;
+
+    -- 3. Deduct Concentrate
+    IF v_d_conc > 0 AND v_conc_id IS NOT NULL THEN
+      UPDATE public.feed_inventory
+      SET current_stock = GREATEST(0, current_stock - v_d_conc),
+          last_updated = NOW()
+      WHERE id = v_conc_id;
+
+      INSERT INTO public.feed_inventory_log (inventory_id, date, change_amount, change_type, source, notes)
+      VALUES (v_conc_id, v_eff_date, -v_d_conc, 'consumption', 'feed_milling', 'Milled feed batch: used ' || v_d_conc || ' bags concentrate');
+    END IF;
+
+    -- 4. Deduct Premix
+    IF v_d_premix > 0 AND v_premix_id IS NOT NULL THEN
+      UPDATE public.feed_inventory
+      SET current_stock = GREATEST(0, current_stock - v_d_premix),
+          last_updated = NOW()
+      WHERE id = v_premix_id;
+
+      INSERT INTO public.feed_inventory_log (inventory_id, date, change_amount, change_type, source, notes)
+      VALUES (v_premix_id, v_eff_date, -v_d_premix, 'consumption', 'feed_milling', 'Milled feed batch: used ' || v_d_premix || ' kg premix');
+    END IF;
+
+    -- 5. Restock Finished Feed
+    IF v_d_bags > 0 AND v_layers_id IS NOT NULL THEN
+      UPDATE public.feed_inventory
+      SET current_stock = current_stock + v_d_bags,
+          last_updated = NOW()
+      WHERE id = v_layers_id;
+
+      INSERT INTO public.feed_inventory_log (inventory_id, date, change_amount, change_type, source, notes)
+      VALUES (v_layers_id, v_eff_date, v_d_bags, 'restock', 'feed_milling', 'Milled ' || v_d_bags || ' bags finished feed (' || v_tonnes || ' tonnes)');
+    END IF;
+
+    RETURN NEW;
+
+  -- ── CASE 2: UPDATE (Compute Differences from OLD) ───────────────────────────
+  ELSIF TG_OP = 'UPDATE' THEN
+    v_eff_date := NEW.date;
+    v_d_maize  := COALESCE(NEW.maize_kg, 0) - COALESCE(OLD.maize_kg, 0);
+    v_d_wheat  := COALESCE(NEW.wheat_offal_bags, 0) - COALESCE(OLD.wheat_offal_bags, 0);
+    v_d_conc   := COALESCE(NEW.concentrate_bags, 0) - COALESCE(OLD.concentrate_bags, 0);
+    v_d_premix := COALESCE(NEW.premix_qty, 0) - COALESCE(OLD.premix_qty, 0);
+    v_d_bags   := COALESCE(NEW.bags_produced, 0) - COALESCE(OLD.bags_produced, 0);
+
+    -- 1. Maize update
+    IF v_d_maize <> 0 AND v_maize_id IS NOT NULL THEN
+      UPDATE public.feed_inventory
+      SET current_stock = GREATEST(0, current_stock - v_d_maize),
+          last_updated = NOW()
+      WHERE id = v_maize_id;
+
+      INSERT INTO public.feed_inventory_log (inventory_id, date, change_amount, change_type, source, notes)
+      VALUES (v_maize_id, v_eff_date, -v_d_maize, CASE WHEN v_d_maize > 0 THEN 'consumption' ELSE 'restock' END, 'feed_milling', 'Milling batch update adjustment (' || -v_d_maize || ' kg maize)');
+    END IF;
+
+    -- 2. Wheat Offal update
+    IF v_d_wheat <> 0 AND v_wheat_id IS NOT NULL THEN
+      UPDATE public.feed_inventory
+      SET current_stock = GREATEST(0, current_stock - v_d_wheat),
+          last_updated = NOW()
+      WHERE id = v_wheat_id;
+
+      INSERT INTO public.feed_inventory_log (inventory_id, date, change_amount, change_type, source, notes)
+      VALUES (v_wheat_id, v_eff_date, -v_d_wheat, CASE WHEN v_d_wheat > 0 THEN 'consumption' ELSE 'restock' END, 'feed_milling', 'Milling batch update adjustment (' || -v_d_wheat || ' bags wheat offal)');
+    END IF;
+
+    -- 3. Concentrate update
+    IF v_d_conc <> 0 AND v_conc_id IS NOT NULL THEN
+      UPDATE public.feed_inventory
+      SET current_stock = GREATEST(0, current_stock - v_d_conc),
+          last_updated = NOW()
+      WHERE id = v_conc_id;
+
+      INSERT INTO public.feed_inventory_log (inventory_id, date, change_amount, change_type, source, notes)
+      VALUES (v_conc_id, v_eff_date, -v_d_conc, CASE WHEN v_d_conc > 0 THEN 'consumption' ELSE 'restock' END, 'feed_milling', 'Milling batch update adjustment (' || -v_d_conc || ' bags concentrate)');
+    END IF;
+
+    -- 4. Premix update
+    IF v_d_premix <> 0 AND v_premix_id IS NOT NULL THEN
+      UPDATE public.feed_inventory
+      SET current_stock = GREATEST(0, current_stock - v_d_premix),
+          last_updated = NOW()
+      WHERE id = v_premix_id;
+
+      INSERT INTO public.feed_inventory_log (inventory_id, date, change_amount, change_type, source, notes)
+      VALUES (v_premix_id, v_eff_date, -v_d_premix, CASE WHEN v_d_premix > 0 THEN 'consumption' ELSE 'restock' END, 'feed_milling', 'Milling batch update adjustment (' || -v_d_premix || ' kg premix)');
+    END IF;
+
+    -- 5. Finished Feed update
+    IF v_d_bags <> 0 AND v_layers_id IS NOT NULL THEN
+      UPDATE public.feed_inventory
+      SET current_stock = GREATEST(0, current_stock + v_d_bags),
+          last_updated = NOW()
+      WHERE id = v_layers_id;
+
+      INSERT INTO public.feed_inventory_log (inventory_id, date, change_amount, change_type, source, notes)
+      VALUES (v_layers_id, v_eff_date, v_d_bags, CASE WHEN v_d_bags > 0 THEN 'restock' ELSE 'consumption' END, 'feed_milling', 'Milling batch update adjustment (' || v_d_bags || ' bags finished feed)');
+    END IF;
+
+    RETURN NEW;
+
+  -- ── CASE 3: DELETE (Revert Deductions and Restocks) ─────────────────────────
+  ELSIF TG_OP = 'DELETE' THEN
+    v_eff_date := OLD.date;
+    v_d_maize  := COALESCE(OLD.maize_kg, 0);
+    v_d_wheat  := COALESCE(OLD.wheat_offal_bags, 0);
+    v_d_conc   := COALESCE(OLD.concentrate_bags, 0);
+    v_d_premix := COALESCE(OLD.premix_qty, 0);
+    v_d_bags   := COALESCE(OLD.bags_produced, 0);
+
+    -- Revert Maize consumption
+    IF v_d_maize > 0 AND v_maize_id IS NOT NULL THEN
+      UPDATE public.feed_inventory
+      SET current_stock = current_stock + v_d_maize,
+          last_updated = NOW()
+      WHERE id = v_maize_id;
+
+      INSERT INTO public.feed_inventory_log (inventory_id, date, change_amount, change_type, source, notes)
+      VALUES (v_maize_id, v_eff_date, v_d_maize, 'restock', 'feed_milling', 'Reversal on deletion of milling batch: returned ' || v_d_maize || ' kg maize');
+    END IF;
+
+    -- Revert Wheat Offal consumption
+    IF v_d_wheat > 0 AND v_wheat_id IS NOT NULL THEN
+      UPDATE public.feed_inventory
+      SET current_stock = current_stock + v_d_wheat,
+          last_updated = NOW()
+      WHERE id = v_wheat_id;
+
+      INSERT INTO public.feed_inventory_log (inventory_id, date, change_amount, change_type, source, notes)
+      VALUES (v_wheat_id, v_eff_date, v_d_wheat, 'restock', 'feed_milling', 'Reversal on deletion of milling batch: returned ' || v_d_wheat || ' bags wheat offal');
+    END IF;
+
+    -- Revert Concentrate consumption
+    IF v_d_conc > 0 AND v_conc_id IS NOT NULL THEN
+      UPDATE public.feed_inventory
+      SET current_stock = current_stock + v_d_conc,
+          last_updated = NOW()
+      WHERE id = v_conc_id;
+
+      INSERT INTO public.feed_inventory_log (inventory_id, date, change_amount, change_type, source, notes)
+      VALUES (v_conc_id, v_eff_date, v_d_conc, 'restock', 'feed_milling', 'Reversal on deletion of milling batch: returned ' || v_d_conc || ' bags concentrate');
+    END IF;
+
+    -- Revert Premix consumption
+    IF v_d_premix > 0 AND v_premix_id IS NOT NULL THEN
+      UPDATE public.feed_inventory
+      SET current_stock = current_stock + v_d_premix,
+          last_updated = NOW()
+      WHERE id = v_premix_id;
+
+      INSERT INTO public.feed_inventory_log (inventory_id, date, change_amount, change_type, source, notes)
+      VALUES (v_premix_id, v_eff_date, v_d_premix, 'restock', 'feed_milling', 'Reversal on deletion of milling batch: returned ' || v_d_premix || ' kg premix');
+    END IF;
+
+    -- Revert Finished Feed restock
+    IF v_d_bags > 0 AND v_layers_id IS NOT NULL THEN
+      UPDATE public.feed_inventory
+      SET current_stock = GREATEST(0, current_stock - v_d_bags),
+          last_updated = NOW()
+      WHERE id = v_layers_id;
+
+      INSERT INTO public.feed_inventory_log (inventory_id, date, change_amount, change_type, source, notes)
+      VALUES (v_layers_id, v_eff_date, -v_d_bags, 'consumption', 'feed_milling', 'Reversal on deletion of milling batch: deducted ' || v_d_bags || ' bags finished feed');
+    END IF;
+
+    RETURN OLD;
+  END IF;
+
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS trg_feed_milling_deduction ON public.feed_production;
+CREATE TRIGGER trg_feed_milling_deduction
+AFTER INSERT OR UPDATE OR DELETE ON public.feed_production
+FOR EACH ROW
+EXECUTE FUNCTION public.handle_feed_milling_deduction();
 
 -- 17. Grower Daily Behavior & Health Logs (Phase 2 - Item V)
 CREATE TABLE IF NOT EXISTS grower_daily_logs (
@@ -302,11 +546,41 @@ CREATE TABLE IF NOT EXISTS worker_permissions (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 21. Per-Worker Module Access Permissions (Item E1-E3)
+CREATE TABLE IF NOT EXISTS worker_module_permissions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  worker_id UUID NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+  module_id TEXT NOT NULL,
+  access TEXT NOT NULL DEFAULT 'none' CHECK (access IN ('none', 'view', 'edit')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(worker_id, module_id)
+);
+
+-- 22. Casual Worker Group Entries (Item F2)
+CREATE TABLE IF NOT EXISTS casual_worker_entries (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  parent_worker_id UUID NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  role_description TEXT,
+  daily_or_monthly_rate NUMERIC NOT NULL DEFAULT 0,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Ensure date_issued column exists on loans
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'loans' AND column_name = 'date_issued') THEN
     ALTER TABLE public.loans ADD COLUMN date_issued DATE DEFAULT CURRENT_DATE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'workers' AND column_name = 'worker_type') THEN
+    ALTER TABLE public.workers ADD COLUMN worker_type TEXT NOT NULL DEFAULT 'farm_staff';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'workers' AND column_name = 'has_app_access') THEN
+    ALTER TABLE public.workers ADD COLUMN has_app_access BOOLEAN NOT NULL DEFAULT TRUE;
   END IF;
 END $$;
 
@@ -361,6 +635,8 @@ ALTER TABLE grower_daily_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE loan_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE general_livestock_detailed ENABLE ROW LEVEL SECURITY;
 ALTER TABLE worker_permissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE worker_module_permissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE casual_worker_entries ENABLE ROW LEVEL SECURITY;
 
 -- ── Grants ────────────────────────────────────────────────────────────────────
 -- Supabase docs: "Adding policies doesn't remove existing grants."
@@ -391,6 +667,8 @@ REVOKE ALL ON TABLE public.grower_daily_logs  FROM anon, authenticated;
 REVOKE ALL ON TABLE public.loan_requests      FROM anon, authenticated;
 REVOKE ALL ON TABLE public.general_livestock_detailed FROM anon, authenticated;
 REVOKE ALL ON TABLE public.worker_permissions FROM anon, authenticated;
+REVOKE ALL ON TABLE public.worker_module_permissions FROM anon, authenticated;
+REVOKE ALL ON TABLE public.casual_worker_entries FROM anon, authenticated;
 
 -- Grant exactly what authenticated users need
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.workers            TO authenticated;
@@ -416,6 +694,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.grower_daily_logs  TO authe
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.loan_requests      TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.general_livestock_detailed TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_permissions TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_module_permissions TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.casual_worker_entries TO authenticated;
 
 -- RLS Policies
 -- (DROP IF EXISTS first — makes this script safe to re-run on an existing database)
@@ -730,6 +1010,36 @@ USING (
   my_role() = 'admin'
 );
 
+-- Worker Module Permissions policies
+DROP POLICY IF EXISTS worker_module_permissions_select ON worker_module_permissions;
+DROP POLICY IF EXISTS worker_module_permissions_admin ON worker_module_permissions;
+CREATE POLICY worker_module_permissions_select ON worker_module_permissions
+FOR SELECT TO authenticated
+USING (
+  my_role() IN ('admin', 'manager') OR worker_id = my_worker_id()
+);
+
+CREATE POLICY worker_module_permissions_admin ON worker_module_permissions
+FOR ALL TO authenticated
+USING (
+  my_role() = 'admin'
+);
+
+-- Casual Worker Entries policies
+DROP POLICY IF EXISTS casual_worker_entries_select ON casual_worker_entries;
+DROP POLICY IF EXISTS casual_worker_entries_all ON casual_worker_entries;
+CREATE POLICY casual_worker_entries_select ON casual_worker_entries
+FOR SELECT TO authenticated
+USING (
+  my_role() IN ('admin', 'manager')
+);
+
+CREATE POLICY casual_worker_entries_all ON casual_worker_entries
+FOR ALL TO authenticated
+USING (
+  my_role() IN ('admin', 'manager')
+);
+
 
 -- =========================================================================
 -- DATABASE TRIGGERS
@@ -932,6 +1242,14 @@ CREATE TRIGGER trg_feed_inventory_updated_at
 
 CREATE TRIGGER trg_feed_inventory_log_updated_at
   BEFORE UPDATE ON feed_inventory_log FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+DROP TRIGGER IF EXISTS trg_worker_module_permissions_updated_at ON worker_module_permissions;
+CREATE TRIGGER trg_worker_module_permissions_updated_at
+  BEFORE UPDATE ON worker_module_permissions FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+DROP TRIGGER IF EXISTS trg_casual_worker_entries_updated_at ON casual_worker_entries;
+CREATE TRIGGER trg_casual_worker_entries_updated_at
+  BEFORE UPDATE ON casual_worker_entries FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 
 -- =========================================================================
@@ -1141,14 +1459,14 @@ BEGIN
   END IF;
 END $$;
 
--- Default Feed Inventory items (Soya Beans removed per farm specification)
+-- Default Feed Inventory items (Opening stocks defaulted to 0 per D5)
 INSERT INTO public.feed_inventory (item_name, unit, current_stock, low_stock_threshold)
 VALUES
-  ('Layers Feed', 'bags', 120, 20),
-  ('Maize', 'kg', 1500, 300),
-  ('Wheat Offal', 'bags', 45, 10),
-  ('Concentrate', 'bags', 60, 15),
-  ('Premix', 'kg', 50, 10)
+  ('Layers Feed', 'bags', 0, 20),
+  ('Maize', 'kg', 0, 300),
+  ('Wheat Offal', 'bags', 0, 10),
+  ('Concentrate', 'bags', 0, 15),
+  ('Premix', 'kg', 0, 10)
 ON CONFLICT (item_name) DO NOTHING;
 
 -- Default Egg Price Setting (if none exists)

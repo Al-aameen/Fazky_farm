@@ -55,6 +55,9 @@ export default function SalesLog() {
   const [newCratePrice, setNewCratePrice] = useState('');
   const [priceEffectiveDate, setPriceEffectiveDate] = useState('2026-08-05');
 
+  // Error state (shared across all save operations on this page)
+  const [errorMessage, setErrorMessage] = useState(null);
+
   // Helper: Get Egg Price active on a date
   const getEggPriceForDate = (dateStr) => {
     const priceSettings = [...(data.egg_price_settings || [])]
@@ -158,6 +161,7 @@ export default function SalesLog() {
   const handleAddSaleSubmit = async (e) => {
     e.preventDefault();
     if (!custName || crates <= 0) return;
+    setErrorMessage(null);
 
     try {
       const dayOfWeekStr = new Date(selectedDate).toLocaleDateString('en-US', { weekday: 'long' });
@@ -174,6 +178,7 @@ export default function SalesLog() {
         created_by: worker?.id || null
       });
 
+      // Only clear form on success
       setShowAddSale(false);
       setCustName('');
       setCrates(0);
@@ -183,12 +188,14 @@ export default function SalesLog() {
       setRemarks('');
     } catch (err) {
       console.error('Failed to save sale log:', err);
+      setErrorMessage(err?.message || 'Failed to save sale. Your data is still on screen.');
     }
   };
 
   const handleRecordPayment = async (customerName) => {
     const amt = parseFloat(payAmount);
     if (isNaN(amt) || amt <= 0) return;
+    setErrorMessage(null);
 
     try {
       const dayOfWeekStr = new Date(selectedDate).toLocaleDateString('en-US', { weekday: 'long' });
@@ -206,11 +213,13 @@ export default function SalesLog() {
       };
 
       await insertRecord('sales_log', payload);
+      // Only clear on success
       setPayExpandedId(null);
       setPayAmount('');
       setPayNotes('');
     } catch (err) {
       console.error('Failed to save debtor payment:', err);
+      setErrorMessage(err?.message || 'Failed to record payment. Your data is still on screen.');
     }
   };
 
@@ -218,6 +227,7 @@ export default function SalesLog() {
     e.preventDefault();
     const price = parseFloat(newCratePrice);
     if (isNaN(price) || price <= 0) return;
+    setErrorMessage(null);
 
     try {
       await insertRecord('egg_price_settings', {
@@ -225,15 +235,29 @@ export default function SalesLog() {
         effective_date: priceEffectiveDate,
         set_by: worker?.id || null
       });
+      // Only clear on success
       setShowPriceSettings(false);
       setNewCratePrice('');
     } catch (err) {
       console.error('Failed to set price:', err);
+      setErrorMessage(err?.message || 'Failed to update crate price.');
     }
   };
 
   return (
     <div className="p-6 space-y-6">
+      {/* Error Banner */}
+      {errorMessage && (
+        <div role="alert" className="flex items-start gap-3 bg-red-50 border border-red-300 rounded-2xl px-5 py-4 text-xs text-red-800 font-sans shadow-sm">
+          <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-bold text-red-800">Error — your data is still on screen</p>
+            <p className="mt-0.5 text-red-700">{errorMessage}</p>
+          </div>
+          <button onClick={() => setErrorMessage(null)} className="shrink-0 text-red-500 hover:text-red-700 font-bold text-xs">Dismiss</button>
+        </div>
+      )}
+
       {/* 1. Debt Banner (Section 6.4.2) */}
       <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 shadow-sm space-y-4">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-amber-200 pb-3">

@@ -13,9 +13,10 @@ export default function ProductionLog() {
   const { role, worker } = useAuth();
   
   const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().split('T')[0]);
-  const [productionData, setProductionData] = useState({}); // { penId: { morning_eggs, evening_eggs, morning_feed, evening_feed, mortality } }
+  const [productionData, setProductionData] = useState({}); // { penId_workerId: { morning_eggs, evening_eggs, morning_feed, evening_feed, mortality } }
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [errorMessage, setErrorMessage] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [showAiDigitizer, setShowAiDigitizer] = useState(false);
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
@@ -23,6 +24,7 @@ export default function ProductionLog() {
 
   // Auto-fetch historical month data on date selection if not cached
   useEffect(() => {
+    setErrorMessage(null);
     if (selectedDate && ensureDateLoaded) {
       ensureDateLoaded('production_log', selectedDate);
     }
@@ -75,6 +77,9 @@ export default function ProductionLog() {
     let activePens = allPens;
     if (selectedDate >= '2026-08-13') {
       activePens = activePens.filter(p => p.is_active !== false && !p.name?.toLowerCase().includes('retired'));
+    }
+    if (role === 'staff' && worker?.id) {
+      activePens = activePens.filter(p => p.worker_id === worker.id);
     }
     const rows = [];
     activePens.forEach(p => {
@@ -163,23 +168,62 @@ export default function ProductionLog() {
     setProductionData(newProd);
   }, [selectedDate, data.production_log, data.pen_worker_history, data.pens]);
 
-  const handleCellChange = (entryKey, field, value) => {
-    // Only accept numeric inputs (integers for counts, decimals for feeds)
+  // Stable today string
+  const todayStr = useMemo(() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }, []);
+
+  const isStaff = role === 'staff';
+  const isStaffHistorical = isStaff && selectedDate !== todayStr;
+  const isEditable = !isStaffHistorical;
+
+  const handleCellChange = (entryKey, field, rawValue) => {
+    if (!isEditable) return;
     const isDecimal = field.includes('feed');
-    let parsed = value;
-    
-    if (value !== '') {
-      parsed = isDecimal ? parseFloat(value) : parseInt(value, 10);
-      if (isNaN(parsed)) return;
+    // Allow digits and at most one dot for feed; only digits for crates/mortality
+    let cleanVal = String(rawValue).replace(isDecimal ? /[^0-9.]/g : /[^0-9]/g, '');
+    if (isDecimal) {
+      const parts = cleanVal.split('.');
+      if (parts.length > 2) {
+        cleanVal = parts[0] + '.' + parts.slice(1).join('');
+      }
     }
 
     setProductionData(prev => ({
       ...prev,
       [entryKey]: {
         ...prev[entryKey],
-        [field]: parsed
+        [field]: cleanVal
       }
     }));
+  };
+
+  const handleCellBlur = (entryKey, field) => {
+    setProductionData(prev => {
+      const row = prev[entryKey];
+      if (!row) return prev;
+      let val = row[field];
+      if (val === '' || val === undefined || val === null) return prev;
+      if (typeof val === 'string') {
+        // C1: Normalize leading decimal (.5 -> 0.5)
+        if (val.startsWith('.')) val = '0' + val;
+        if (val.endsWith('.')) val = val.slice(0, -1);
+        const isDecimal = field.includes('feed');
+        const num = isDecimal ? parseFloat(val) : parseInt(val, 10);
+        return {
+          ...prev,
+          [entryKey]: {
+            ...row,
+            [field]: isNaN(num) ? '' : num
+          }
+        };
+      }
+      return prev;
+    });
   };
 
   // Subtotal calculations for a pen house group
@@ -214,7 +258,9 @@ export default function ProductionLog() {
     return totals;
   };
 
-  const COL_FIELDS = ['morning_eggs', 'evening_eggs', 'morning_feed', 'evening_feed', 'mortality'];
+  // C4: Order columns with Mortality immediately after worker name
+  // Col 0: mortality, Col 1: morning_eggs, Col 2: evening_eggs, Col 3: morning_feed, Col 4: evening_feed
+  const COL_FIELDS = ['mortality', 'morning_eggs', 'evening_eggs', 'morning_feed', 'evening_feed'];
 
   const flatWorkerRows = useMemo(() => {
     return groupedPenHouses.flatMap(g => g.workers);
@@ -235,6 +281,7 @@ export default function ProductionLog() {
   } = useGridNavigation({
     numRows: flatWorkerRows.length,
     numCols: 5,
+    isCellEditable: () => isEditable,
     getCellValue: (r, c) => {
       const workerItem = flatWorkerRows[r];
       if (!workerItem) return '';
@@ -247,6 +294,7 @@ export default function ProductionLog() {
       handleCellChange(workerItem.entryKey, COL_FIELDS[c], val);
     },
     setMultipleCellValues: (updates) => {
+      if (!isEditable) return;
       setProductionData(prev => {
         const next = { ...prev };
         updates.forEach(({ r, c, val }) => {
@@ -261,7 +309,7 @@ export default function ProductionLog() {
         return next;
       });
     },
-    isDecimalCol: (c) => c === 2 || c === 3
+    isDecimalCol: (c) => c === 3 || c === 4
   });
 
   // Grand totals calculation
@@ -272,8 +320,13 @@ export default function ProductionLog() {
   const handleSaveAll = async () => {
     setSaving(true);
     setSaveSuccess(false);
+    setErrorMessage(null);
+
     try {
+      if (import.meta.env.DEV) console.log('[ProductionLog] handleSaveAll invoked for date:', selectedDate);
+
       const dayOfWeekStr = new Date(selectedDate).toLocaleDateString('en-US', { weekday: 'long' });
+      const recordsToUpsert = [];
 
       for (const item of visibleAssignments) {
         const prod = productionData[item.entryKey] || {};
@@ -285,9 +338,12 @@ export default function ProductionLog() {
         const evening_feed = parseFloat(prod.evening_feed) || 0;
         const mortality = parseInt(prod.mortality, 10) || 0;
 
+        // Ensure worker_id is either a valid UUID or null
+        const workerId = (item.worker_id && item.worker_id !== 'unassigned') ? item.worker_id : null;
+
         const payload = {
           pen_id: item.pen_id,
-          worker_id: item.worker_id || null,
+          worker_id: workerId,
           date: selectedDate,
           day_of_week: dayOfWeekStr,
           morning_eggs,
@@ -298,21 +354,54 @@ export default function ProductionLog() {
         };
 
         if (prod.id) {
-          // Update existing log
-          await updateRecord('production_log', {
-            id: prod.id,
-            ...payload
-          });
-        } else {
-          // Insert new log
-          await insertRecord('production_log', payload);
+          payload.id = prod.id;
         }
+
+        recordsToUpsert.push(payload);
+      }
+
+      if (import.meta.env.DEV) console.log('[ProductionLog] recordsToUpsert count:', recordsToUpsert.length, recordsToUpsert);
+
+      if (recordsToUpsert.length === 0) {
+        console.warn('[ProductionLog] No records to upsert for date:', selectedDate);
+        setSaving(false);
+        return;
+      }
+
+      // Upsert using the composite unique constraint (pen_id, worker_id, date)
+      const res = await bulkInsertRecords('production_log', recordsToUpsert, {
+        onConflict: 'pen_id,worker_id,date'
+      });
+
+      if (import.meta.env.DEV) console.log('[ProductionLog] bulkInsertRecords response:', res);
+
+      if (res && !res.success) {
+        throw new Error(res.error || 'Failed to save production records.');
+      }
+
+      // If returned rows with IDs, update local IDs map
+      if (res && res.data) {
+        setProductionData(prev => {
+          const next = { ...prev };
+          res.data.forEach(savedRow => {
+            const key = savedRow.worker_id ? `${savedRow.pen_id}_${savedRow.worker_id}` : savedRow.pen_id;
+            if (next[key]) {
+              next[key] = {
+                ...next[key],
+                id: savedRow.id
+              };
+            }
+          });
+          return next;
+        });
       }
 
       setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 3000);
+      setTimeout(() => setSaveSuccess(false), 3500);
     } catch (err) {
-      console.error('Failed to save production records:', err);
+      console.error('[ProductionLog] Failed to save production records:', err);
+      const errMsg = err?.message || 'Failed to save records to database.';
+      setErrorMessage(errMsg);
     } finally {
       setSaving(false);
     }
@@ -408,7 +497,7 @@ export default function ProductionLog() {
           {/* Save All Button */}
           <button
             onClick={handleSaveAll}
-            disabled={saving}
+            disabled={saving || !isEditable}
             className={`flex items-center gap-1.5 text-white font-bold px-4 py-1.5 rounded-lg text-xs shadow-md transition-all ${
               saveSuccess 
                 ? 'bg-primary' 
@@ -429,6 +518,35 @@ export default function ProductionLog() {
           </button>
         </div>
       </div>
+
+      {/* Staff Historical Read-Only Notice */}
+      {isStaffHistorical && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-900 px-4 py-3 rounded-2xl flex items-center gap-2.5 text-xs shadow-xs">
+          <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
+          <span>
+            <strong>Read-Only:</strong> You are viewing historical records for <strong>{selectedDate}</strong>. Staff cannot modify past dates.
+          </span>
+        </div>
+      )}
+
+      {/* Error Alert Banner */}
+      {errorMessage && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-2xl flex items-center justify-between text-xs shadow-xs animate-in fade-in">
+          <div className="flex items-center gap-2.5">
+            <ShieldAlert className="w-4 h-4 text-red-600 shrink-0" />
+            <div>
+              <span className="font-bold block">Save Failed:</span>
+              <span className="font-mono text-[11px] opacity-90">{errorMessage}</span>
+            </div>
+          </div>
+          <button
+            onClick={() => setErrorMessage(null)}
+            className="px-2.5 py-1 bg-red-100 hover:bg-red-200 text-red-800 rounded-lg font-bold text-xs transition-colors shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Smart Search / Filter Bar */}
       <div className="flex items-center gap-3 bg-white border border-border-farm rounded-xl px-4 py-2.5 shadow-sm">
@@ -469,14 +587,14 @@ export default function ProductionLog() {
             <table className="w-full border-collapse text-left text-xs">
               <thead>
                 <tr className="bg-dark-green text-white font-serif text-[11px] shadow-[0_1px_0_0_rgba(0,0,0,0.15)] uppercase tracking-wide">
-                  <th className="p-3 border-r border-white/10 sticky left-0 bg-dark-green w-48 z-10">Pen & Worker Name</th>
-                  <th className="p-3 border-r border-white/10 text-center">Morning Eggs</th>
-                  <th className="p-3 border-r border-white/10 text-center">Evening Eggs</th>
-                  <th className="p-3 border-r border-white/10 text-center font-bold bg-[#1e421a]/70">Total Eggs</th>
+                  <th className="p-3 border-r border-white/10 sticky left-0 bg-dark-green w-48 z-10">Pen &amp; Worker Name</th>
+                  <th className="p-3 border-r border-white/10 text-center w-24">Mortality</th>
+                  <th className="p-3 border-r border-white/10 text-center">Morning Crates</th>
+                  <th className="p-3 border-r border-white/10 text-center">Evening Crates</th>
+                  <th className="p-3 border-r border-white/10 text-center font-bold bg-[#1e421a]/70">Total Crates</th>
                   <th className="p-3 border-r border-white/10 text-center">Morn Feed (Bags)</th>
                   <th className="p-3 border-r border-white/10 text-center">Eve Feed (Bags)</th>
-                  <th className="p-3 border-r border-white/10 text-center font-bold bg-[#1e421a]/70">Total Feed (Bags)</th>
-                  <th className="p-3 text-center">Mortality</th>
+                  <th className="p-3 text-center font-bold bg-[#1e421a]/70">Total Feed (Bags)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-farm">
@@ -533,49 +651,51 @@ export default function ProductionLog() {
                               </div>
                             </td>
 
-                            {/* Morning Eggs (Col 0) */}
-                            <td className="p-0 border-r border-border-farm relative">
+                            {/* Mortality (Col 0) */}
+                            <td className={`p-0 border-r border-border-farm relative ${isMortalityPositive && !isSel0 ? 'bg-red-50' : ''}`}>
                               <input
                                 ref={el => registerRef(rowIndex, 0, el)}
                                 data-row={rowIndex}
                                 data-col={0}
-                                type="number"
-                                step="1"
-                                min="0"
+                                type="text"
                                 inputMode="numeric"
                                 pattern="[0-9]*"
-                                value={row.morning_eggs ?? ''}
+                                disabled={!isEditable}
+                                value={row.mortality ?? ''}
                                 onFocus={e => e.target.select()}
-                                onChange={e => handleCellChange(item.entryKey, 'morning_eggs', e.target.value)}
+                                onBlur={() => handleCellBlur(item.entryKey, 'mortality')}
+                                placeholder="0"
+                                onChange={e => handleCellChange(item.entryKey, 'mortality', e.target.value)}
                                 onMouseDown={e => handleCellMouseDown(e, rowIndex, 0)}
                                 onMouseEnter={() => handleCellMouseEnter(rowIndex, 0)}
                                 onKeyDown={e => handleKeyDown(e, rowIndex, 0)}
                                 style={{ minHeight: '44px', scrollMargin: '80px 0 0 190px' }}
-                                className={`w-full text-center py-3.5 font-mono border transition-colors rounded-xs select-none ${
+                                className={`w-full text-center py-3.5 font-mono font-bold border transition-colors rounded-xs select-none ${
                                   isSel0
-                                    ? 'bg-[#e0f0ff] text-dark-green border-blue-400 font-bold'
-                                    : 'bg-bg-farm/60 text-text-primary border-border-farm/40'
+                                    ? 'bg-[#e0f0ff] text-dark-green border-blue-400'
+                                    : isMortalityPositive
+                                    ? 'text-red-accent bg-red-50/60 border-border-farm/40'
+                                    : 'text-text-primary bg-bg-farm/60 border-border-farm/40'
                                 } ${
                                   isAnc0 ? 'ring-2 ring-primary ring-offset-1 z-10 bg-yellow-50/90' : ''
-                                } placeholder:text-text-muted/40 focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none hover:bg-bg-farm`}
-                                placeholder="0"
+                                } placeholder:text-text-muted/40 focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none hover:bg-bg-farm disabled:bg-gray-50 disabled:text-text-muted disabled:cursor-not-allowed`}
                               />
                             </td>
 
-                            {/* Evening Eggs (Col 1) */}
+                            {/* Morning Crates (Col 1) */}
                             <td className="p-0 border-r border-border-farm relative">
                               <input
                                 ref={el => registerRef(rowIndex, 1, el)}
                                 data-row={rowIndex}
                                 data-col={1}
-                                type="number"
-                                step="1"
-                                min="0"
+                                type="text"
                                 inputMode="numeric"
                                 pattern="[0-9]*"
-                                value={row.evening_eggs ?? ''}
+                                disabled={!isEditable}
+                                value={row.morning_eggs ?? ''}
                                 onFocus={e => e.target.select()}
-                                onChange={e => handleCellChange(item.entryKey, 'evening_eggs', e.target.value)}
+                                onBlur={() => handleCellBlur(item.entryKey, 'morning_eggs')}
+                                onChange={e => handleCellChange(item.entryKey, 'morning_eggs', e.target.value)}
                                 onMouseDown={e => handleCellMouseDown(e, rowIndex, 1)}
                                 onMouseEnter={() => handleCellMouseEnter(rowIndex, 1)}
                                 onKeyDown={e => handleKeyDown(e, rowIndex, 1)}
@@ -586,29 +706,25 @@ export default function ProductionLog() {
                                     : 'bg-bg-farm/60 text-text-primary border-border-farm/40'
                                 } ${
                                   isAnc1 ? 'ring-2 ring-primary ring-offset-1 z-10 bg-yellow-50/90' : ''
-                                } placeholder:text-text-muted/40 focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none hover:bg-bg-farm`}
+                                } placeholder:text-text-muted/40 focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none hover:bg-bg-farm disabled:bg-gray-50 disabled:text-text-muted disabled:cursor-not-allowed`}
                                 placeholder="0"
                               />
                             </td>
 
-                            {/* Total Eggs (auto - skipped in navigation) */}
-                            <td className="p-3 border-r border-border-farm text-center font-mono font-bold bg-green-50/20 text-dark-green text-sm select-none">
-                              {(mEggs + eEggs).toLocaleString()}
-                            </td>
-
-                            {/* Morn Feed (Col 2) */}
+                            {/* Evening Crates (Col 2) */}
                             <td className="p-0 border-r border-border-farm relative">
                               <input
                                 ref={el => registerRef(rowIndex, 2, el)}
                                 data-row={rowIndex}
                                 data-col={2}
-                                type="number"
-                                step="0.5"
-                                min="0"
-                                inputMode="decimal"
-                                value={row.morning_feed ?? ''}
+                                type="text"
+                                inputMode="numeric"
+                                pattern="[0-9]*"
+                                disabled={!isEditable}
+                                value={row.evening_eggs ?? ''}
                                 onFocus={e => e.target.select()}
-                                onChange={e => handleCellChange(item.entryKey, 'morning_feed', e.target.value)}
+                                onBlur={() => handleCellBlur(item.entryKey, 'evening_eggs')}
+                                onChange={e => handleCellChange(item.entryKey, 'evening_eggs', e.target.value)}
                                 onMouseDown={e => handleCellMouseDown(e, rowIndex, 2)}
                                 onMouseEnter={() => handleCellMouseEnter(rowIndex, 2)}
                                 onKeyDown={e => handleKeyDown(e, rowIndex, 2)}
@@ -619,24 +735,29 @@ export default function ProductionLog() {
                                     : 'bg-bg-farm/60 text-text-primary border-border-farm/40'
                                 } ${
                                   isAnc2 ? 'ring-2 ring-primary ring-offset-1 z-10 bg-yellow-50/90' : ''
-                                } placeholder:text-text-muted/40 focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none hover:bg-bg-farm`}
+                                } placeholder:text-text-muted/40 focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none hover:bg-bg-farm disabled:bg-gray-50 disabled:text-text-muted disabled:cursor-not-allowed`}
                                 placeholder="0"
                               />
                             </td>
 
-                            {/* Eve Feed (Col 3) */}
+                            {/* Total Crates (auto - read only) */}
+                            <td className="p-3 border-r border-border-farm text-center font-mono font-bold bg-green-50/20 text-dark-green text-sm select-none">
+                              {(mEggs + eEggs).toLocaleString()}
+                            </td>
+
+                            {/* Morn Feed (Col 3) */}
                             <td className="p-0 border-r border-border-farm relative">
                               <input
                                 ref={el => registerRef(rowIndex, 3, el)}
                                 data-row={rowIndex}
                                 data-col={3}
-                                type="number"
-                                step="0.5"
-                                min="0"
+                                type="text"
                                 inputMode="decimal"
-                                value={row.evening_feed ?? ''}
+                                disabled={!isEditable}
+                                value={row.morning_feed ?? ''}
                                 onFocus={e => e.target.select()}
-                                onChange={e => handleCellChange(item.entryKey, 'evening_feed', e.target.value)}
+                                onBlur={() => handleCellBlur(item.entryKey, 'morning_feed')}
+                                onChange={e => handleCellChange(item.entryKey, 'morning_feed', e.target.value)}
                                 onMouseDown={e => handleCellMouseDown(e, rowIndex, 3)}
                                 onMouseEnter={() => handleCellMouseEnter(rowIndex, 3)}
                                 onKeyDown={e => handleKeyDown(e, rowIndex, 3)}
@@ -647,45 +768,42 @@ export default function ProductionLog() {
                                     : 'bg-bg-farm/60 text-text-primary border-border-farm/40'
                                 } ${
                                   isAnc3 ? 'ring-2 ring-primary ring-offset-1 z-10 bg-yellow-50/90' : ''
-                                } placeholder:text-text-muted/40 focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none hover:bg-bg-farm`}
+                                } placeholder:text-text-muted/40 focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none hover:bg-bg-farm disabled:bg-gray-50 disabled:text-text-muted disabled:cursor-not-allowed`}
                                 placeholder="0"
                               />
                             </td>
 
-                            {/* Total Feed (auto - skipped in navigation) */}
-                            <td className="p-3 border-r border-border-farm text-center font-mono font-bold bg-green-50/20 text-dark-green text-sm select-none">
-                              {(mFeed + eFeed).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
-                            </td>
-
-                            {/* Mortality (Col 4) */}
-                            <td className={`p-0 align-middle transition-colors relative ${isMortalityPositive && !isSel4 ? 'bg-red-50' : ''}`}>
+                            {/* Eve Feed (Col 4) */}
+                            <td className="p-0 border-r border-border-farm relative">
                               <input
                                 ref={el => registerRef(rowIndex, 4, el)}
                                 data-row={rowIndex}
                                 data-col={4}
-                                type="number"
-                                step="1"
-                                min="0"
-                                inputMode="numeric"
-                                pattern="[0-9]*"
-                                value={row.mortality ?? ''}
+                                type="text"
+                                inputMode="decimal"
+                                disabled={!isEditable}
+                                value={row.evening_feed ?? ''}
                                 onFocus={e => e.target.select()}
-                                placeholder="0"
-                                onChange={e => handleCellChange(item.entryKey, 'mortality', e.target.value)}
+                                onBlur={() => handleCellBlur(item.entryKey, 'evening_feed')}
+                                onChange={e => handleCellChange(item.entryKey, 'evening_feed', e.target.value)}
                                 onMouseDown={e => handleCellMouseDown(e, rowIndex, 4)}
                                 onMouseEnter={() => handleCellMouseEnter(rowIndex, 4)}
                                 onKeyDown={e => handleKeyDown(e, rowIndex, 4)}
                                 style={{ minHeight: '44px', scrollMargin: '80px 0 0 190px' }}
-                                className={`w-full text-center py-3.5 font-mono font-bold border transition-colors rounded-xs select-none ${
+                                className={`w-full text-center py-3.5 font-mono border transition-colors rounded-xs select-none ${
                                   isSel4
-                                    ? 'bg-[#e0f0ff] text-dark-green border-blue-400'
-                                    : isMortalityPositive
-                                    ? 'text-red-accent bg-red-50/60 border-border-farm/40'
-                                    : 'text-text-primary bg-bg-farm/60 border-border-farm/40'
+                                    ? 'bg-[#e0f0ff] text-dark-green border-blue-400 font-bold'
+                                    : 'bg-bg-farm/60 text-text-primary border-border-farm/40'
                                 } ${
                                   isAnc4 ? 'ring-2 ring-primary ring-offset-1 z-10 bg-yellow-50/90' : ''
-                                } placeholder:text-text-muted/40 focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none hover:bg-bg-farm`}
+                                } placeholder:text-text-muted/40 focus:bg-yellow-50 focus:ring-1 focus:ring-primary focus:outline-none hover:bg-bg-farm disabled:bg-gray-50 disabled:text-text-muted disabled:cursor-not-allowed`}
+                                placeholder="0"
                               />
+                            </td>
+
+                            {/* Total Feed (auto - read only) */}
+                            <td className="p-3 text-center font-mono font-bold bg-green-50/20 text-dark-green text-sm select-none">
+                              {(mFeed + eFeed).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
                             </td>
                           </tr>
                         );
@@ -696,18 +814,18 @@ export default function ProductionLog() {
                         <td className="p-2.5 sticky left-0 bg-green-50/50 border-r border-border-farm pl-4 z-10">
                           {house.penName} Subtotal
                         </td>
-                        <td className="p-2 text-center font-mono">{sub.morning_eggs.toLocaleString()}</td>
-                        <td className="p-2 text-center font-mono">{sub.evening_eggs.toLocaleString()}</td>
-                        <td className="p-2 text-center font-mono font-bold text-dark-green bg-green-50/40 text-sm">
+                        <td className={`p-2 border-r border-border-farm text-center font-mono ${sub.mortality > 0 ? 'text-red-accent' : ''}`}>
+                          {sub.mortality.toLocaleString()}
+                        </td>
+                        <td className="p-2 border-r border-border-farm text-center font-mono">{sub.morning_eggs.toLocaleString()}</td>
+                        <td className="p-2 border-r border-border-farm text-center font-mono">{sub.evening_eggs.toLocaleString()}</td>
+                        <td className="p-2 border-r border-border-farm text-center font-mono font-bold text-dark-green bg-green-50/40 text-sm">
                           {sub.total_eggs.toLocaleString()}
                         </td>
-                        <td className="p-2 text-center font-mono">{sub.morning_feed.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
-                        <td className="p-2 text-center font-mono">{sub.evening_feed.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
+                        <td className="p-2 border-r border-border-farm text-center font-mono">{sub.morning_feed.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
+                        <td className="p-2 border-r border-border-farm text-center font-mono">{sub.evening_feed.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
                         <td className="p-2 text-center font-mono font-bold text-dark-green bg-green-50/40 text-sm">
                           {sub.total_feed.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
-                        </td>
-                        <td className={`p-2 text-center font-mono ${sub.mortality > 0 ? 'text-red-accent' : ''}`}>
-                          {sub.mortality.toLocaleString()}
                         </td>
                       </tr>
                     </React.Fragment>
@@ -719,17 +837,17 @@ export default function ProductionLog() {
                   <td className="p-3 sticky left-0 bg-green-100/70 border-r border-border-farm pl-4 z-10">
                     Grand Total
                   </td>
-                  <td className="p-3 text-center font-mono">{grandTotals.morning_eggs.toLocaleString()}</td>
-                  <td className="p-3 text-center font-mono">{grandTotals.evening_eggs.toLocaleString()}</td>
-                  <td className="p-3 text-center font-mono font-black text-primary bg-green-150/20 text-base">
+                  <td className="p-3 border-r border-border-farm text-center font-mono text-red-accent">{grandTotals.mortality.toLocaleString()}</td>
+                  <td className="p-3 border-r border-border-farm text-center font-mono">{grandTotals.morning_eggs.toLocaleString()}</td>
+                  <td className="p-3 border-r border-border-farm text-center font-mono">{grandTotals.evening_eggs.toLocaleString()}</td>
+                  <td className="p-3 border-r border-border-farm text-center font-mono font-black text-primary bg-green-150/20 text-base">
                     {grandTotals.total_eggs.toLocaleString()}
                   </td>
-                  <td className="p-3 text-center font-mono">{grandTotals.morning_feed.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
-                  <td className="p-3 text-center font-mono">{grandTotals.evening_feed.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
+                  <td className="p-3 border-r border-border-farm text-center font-mono">{grandTotals.morning_feed.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
+                  <td className="p-3 border-r border-border-farm text-center font-mono">{grandTotals.evening_feed.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</td>
                   <td className="p-3 text-center font-mono font-black text-primary bg-green-150/20 text-base">
                     {grandTotals.total_feed.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
                   </td>
-                  <td className="p-3 text-center font-mono text-red-accent">{grandTotals.mortality.toLocaleString()}</td>
                 </tr>
               </tbody>
             </table>
@@ -767,7 +885,7 @@ export default function ProductionLog() {
               <thead>
                 <tr className="bg-bg-farm border-b border-border-farm font-bold text-text-muted uppercase tracking-wider">
                   <th className="p-3">Date</th>
-                  <th className="p-3 text-center">Total Eggs</th>
+                  <th className="p-3 text-center">Total Crates</th>
                   <th className="p-3 text-center">Total Feed (kg)</th>
                   <th className="p-3 text-center">Mortality</th>
                 </tr>

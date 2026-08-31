@@ -23,7 +23,14 @@ export default function DatePicker({
   max,
   className = '' 
 }) {
-  const todayStr = new Date().toISOString().split('T')[0];
+  // Stable today string computed from local clock (avoids UTC offset bug)
+  const todayStr = (() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const mo = String(d.getMonth() + 1).padStart(2, '0');
+    const dy = String(d.getDate()).padStart(2, '0');
+    return `${y}-${mo}-${dy}`;
+  })();
   const currentMonthStr = todayStr.slice(0, 7);
   const maxAllowedDateStr = allowFutureDates ? (max || '2035-12-31') : (max || todayStr);
 
@@ -93,9 +100,13 @@ export default function DatePicker({
       const mm = String(prev.getMonth() + 1).padStart(2, '0');
       onChange(`${prev.getFullYear()}-${mm}`);
     } else {
-      const prev = new Date(selectedDate);
-      prev.setDate(prev.getDate() - 1);
-      onChange(prev.toISOString().split('T')[0]);
+      // Timezone-safe: parse local date parts, subtract 1 day, re-build YYYY-MM-DD
+      const [cy, cm, cd] = (value || todayStr).split('-').map(Number);
+      const prev = new Date(cy, cm - 1, cd - 1); // local midnight
+      const y = prev.getFullYear();
+      const m = String(prev.getMonth() + 1).padStart(2, '0');
+      const d = String(prev.getDate()).padStart(2, '0');
+      onChange(`${y}-${m}-${d}`);
     }
   };
 
@@ -108,9 +119,13 @@ export default function DatePicker({
       const isoMonth = `${next.getFullYear()}-${mm}`;
       if (allowFutureDates || isoMonth <= currentMonthStr) onChange(isoMonth);
     } else {
-      const next = new Date(selectedDate);
-      next.setDate(next.getDate() + 1);
-      const iso = next.toISOString().split('T')[0];
+      // Timezone-safe: parse local date parts, add 1 day, re-build YYYY-MM-DD
+      const [cy, cm, cd] = (value || todayStr).split('-').map(Number);
+      const next = new Date(cy, cm - 1, cd + 1); // local midnight
+      const y = next.getFullYear();
+      const m = String(next.getMonth() + 1).padStart(2, '0');
+      const d = String(next.getDate()).padStart(2, '0');
+      const iso = `${y}-${m}-${d}`;
       if (allowFutureDates || iso <= maxAllowedDateStr) onChange(iso);
     }
   };

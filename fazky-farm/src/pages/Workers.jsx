@@ -16,7 +16,9 @@ import {
   AlertCircle,
   Eye,
   EyeOff,
-  ShieldAlert
+  ShieldAlert,
+  Users,
+  Plus
 } from 'lucide-react';
 
 export default function Workers() {
@@ -30,6 +32,8 @@ export default function Workers() {
   const [invName, setInvName] = useState('');
   const [invEmail, setInvEmail] = useState('');
   const [invRole, setInvRole] = useState('staff');
+  const [invWorkerType, setInvWorkerType] = useState('farm_staff');
+  const [invHasAppAccess, setInvHasAppAccess] = useState(true);
   const [invSalary, setInvSalary] = useState('');
   const [invPassword, setInvPassword] = useState('');
   const [showInvPass, setShowInvPass] = useState(false);
@@ -39,8 +43,19 @@ export default function Workers() {
   const [editingWorker, setEditingWorker] = useState(null);
   const [editName, setEditName] = useState('');
   const [editRole, setEditRole] = useState('staff');
+  const [editWorkerType, setEditWorkerType] = useState('farm_staff');
+  const [editHasAppAccess, setEditHasAppAccess] = useState(true);
   const [editSalary, setEditSalary] = useState('');
   const [editStatus, setEditStatus] = useState('active');
+
+  // Casual Worker Roster States (F2)
+  const [showCasualModal, setShowCasualModal] = useState(false);
+  const [selectedCasualParent, setSelectedCasualParent] = useState(null);
+  const [casualName, setCasualName] = useState('');
+  const [casualRate, setCasualRate] = useState('');
+  const [casualDays, setCasualDays] = useState('');
+  const [casualRoleDesc, setCasualRoleDesc] = useState('');
+  const [casualSubmitting, setCasualSubmitting] = useState(false);
 
   // Delete Worker Security States
   const [workerToDelete, setWorkerToDelete] = useState(null);
@@ -62,6 +77,8 @@ export default function Workers() {
         name: invName,
         email: invEmail,
         role: invRole,
+        worker_type: invWorkerType,
+        has_app_access: invHasAppAccess,
         base_salary: salary,
         password: invPassword || undefined
       };
@@ -82,6 +99,8 @@ export default function Workers() {
           name: invName,
           email: invEmail.toLowerCase(),
           role: invRole,
+          worker_type: invWorkerType,
+          has_app_access: invHasAppAccess,
           base_salary: salary,
           status: invPassword ? 'active' : 'invited'
         });
@@ -95,6 +114,8 @@ export default function Workers() {
       setInvName('');
       setInvEmail('');
       setInvRole('staff');
+      setInvWorkerType('farm_staff');
+      setInvHasAppAccess(true);
       setInvSalary('');
       setInvPassword('');
       setTimeout(() => setMessage(''), 5000);
@@ -118,22 +139,79 @@ export default function Workers() {
         id: editingWorker.id,
         name: editName,
         role: editRole,
+        worker_type: editWorkerType,
+        has_app_access: editHasAppAccess,
         base_salary: salary,
         status: editStatus
       });
 
       await refresh();
+      setMessage(`Worker "${editName}" updated successfully.`);
+      setMessageType('success');
       setShowEditModal(false);
       setEditingWorker(null);
-      setMessage('Worker profile updated successfully.');
-      setMessageType('success');
       setTimeout(() => setMessage(''), 4000);
     } catch (err) {
-      console.error('Failed to update worker:', err);
-      setMessage('Failed to update profile.');
+      console.error('Failed to edit worker:', err);
+      setMessage(err.message || 'Failed to update worker.');
       setMessageType('error');
     } finally {
       setActionLoading(false);
+    }
+  };
+
+  // Casual Worker Roster Handlers (F2)
+  const handleAddCasualEntry = async (e) => {
+    e.preventDefault();
+    if (!selectedCasualParent || !casualName.trim()) return;
+    setCasualSubmitting(true);
+    try {
+      const rate = parseFloat(casualRate) || 0;
+      const days = parseFloat(casualDays) || 0;
+      await insertRecord('casual_worker_entries', {
+        parent_worker_id: selectedCasualParent.id,
+        worker_name: casualName.trim(),
+        daily_rate: rate,
+        days_worked: days,
+        role_description: casualRoleDesc.trim() || 'Casual Laborer'
+      });
+
+      // Recalculate parent base_salary
+      const existingEntries = (data.casual_worker_entries || []).filter(c => c.parent_worker_id === selectedCasualParent.id);
+      const newTotalSalary = existingEntries.reduce((sum, c) => sum + (Number(c.daily_rate || 0) * Number(c.days_worked || 0)), 0) + (rate * days);
+      await updateRecord('workers', {
+        id: selectedCasualParent.id,
+        base_salary: newTotalSalary
+      });
+
+      setCasualName('');
+      setCasualRate('');
+      setCasualDays('');
+      setCasualRoleDesc('');
+      await refresh();
+    } catch (err) {
+      console.error('Failed to add casual entry:', err);
+      alert('Error adding casual entry: ' + err.message);
+    } finally {
+      setCasualSubmitting(false);
+    }
+  };
+
+  const handleDeleteCasualEntry = async (entryId) => {
+    try {
+      const entry = (data.casual_worker_entries || []).find(c => c.id === entryId);
+      await deleteRecord('casual_worker_entries', entryId);
+      if (selectedCasualParent && entry) {
+        const remaining = (data.casual_worker_entries || []).filter(c => c.parent_worker_id === selectedCasualParent.id && c.id !== entryId);
+        const newTotalSalary = remaining.reduce((sum, c) => sum + (Number(c.daily_rate || 0) * Number(c.days_worked || 0)), 0);
+        await updateRecord('workers', {
+          id: selectedCasualParent.id,
+          base_salary: newTotalSalary
+        });
+      }
+      await refresh();
+    } catch (err) {
+      console.error('Failed to delete casual entry:', err);
     }
   };
 
@@ -186,6 +264,38 @@ export default function Workers() {
       setDeleteConfirmError(err.message || 'Failed to delete worker.');
     } finally {
       setActionLoading(false);
+    }
+  };
+
+  const hasWorkerHistory = (workerId) => {
+    const inCensus = (data.census_counts || []).some(c => c.worker_id === workerId);
+    const inProd = (data.production_log || []).some(p => p.worker_id === workerId);
+    const inLoans = (data.loans || []).some(l => l.worker_id === workerId);
+    const inAssignments = (data.pen_worker_history || []).some(a => a.worker_id === workerId);
+    return inCensus || inProd || inLoans || inAssignments;
+  };
+
+  const handleToggleActive = async (targetWorker) => {
+    const nextStatus = targetWorker.status === 'inactive' ? 'active' : 'inactive';
+    const confirmMsg = nextStatus === 'inactive'
+      ? `Deactivate worker "${targetWorker.name}"?\n\nThey have historical census/production records which will be preserved, but they will no longer appear in daily entry grids or login lists.`
+      : `Reactivate worker "${targetWorker.name}"?`;
+    
+    if (!window.confirm(confirmMsg)) return;
+
+    try {
+      await updateRecord('workers', {
+        id: targetWorker.id,
+        status: nextStatus
+      });
+      await refresh();
+      setMessage(`Worker "${targetWorker.name}" status updated to ${nextStatus}.`);
+      setMessageType('success');
+      setTimeout(() => setMessage(''), 4000);
+    } catch (err) {
+      console.error('Failed to update worker status:', err);
+      setMessage('Failed to change status: ' + err.message);
+      setMessageType('error');
     }
   };
 
@@ -251,10 +361,37 @@ export default function Workers() {
                   </div>
                 </div>
 
-                <span className={`border text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${getStatusColor(w.status)}`}>
-                  {w.status || 'active'}
-                </span>
+                <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                  <span className={`border text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${getStatusColor(w.status)}`}>
+                    {w.status || 'active'}
+                  </span>
+                  <span className="bg-emerald-50 text-dark-green border border-emerald-200 text-[9px] font-bold px-2 py-0.5 rounded-full">
+                    {w.worker_type === 'farm_staff' ? '🌾 Farm Staff' :
+                     w.worker_type === 'veterinary' ? '🩺 Veterinary' :
+                     w.worker_type === 'security' ? '🛡️ Security' :
+                     w.worker_type === 'casual_group' ? '👥 Casual Group' :
+                     w.worker_type === 'admin_staff' ? '💼 Admin Staff' : '🌾 Farm Staff'}
+                  </span>
+                  {w.has_app_access === false && (
+                    <span className="bg-gray-100 text-gray-600 border border-gray-300 text-[9px] font-bold px-1.5 py-0.5 rounded-full">
+                      No App Login
+                    </span>
+                  )}
+                </div>
               </div>
+
+              {w.worker_type === 'casual_group' && (
+                <button
+                  onClick={() => {
+                    setSelectedCasualParent(w);
+                    setShowCasualModal(true);
+                  }}
+                  className="w-full bg-emerald-50 hover:bg-emerald-100 text-dark-green border border-emerald-200 font-bold py-1.5 px-3 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-colors"
+                >
+                  <Users className="w-3.5 h-3.5 text-primary" />
+                  <span>Manage Casual Roster ({(data.casual_worker_entries || []).filter(c => c.parent_worker_id === w.id).length} workers)</span>
+                </button>
+              )}
 
               {/* Worker Responsibility & Performance Summary (Item XIII) */}
               {(() => {
@@ -282,15 +419,29 @@ export default function Workers() {
                   directPens.forEach(p => assignedPenNames.push(resolvePenDisplayName(p.id, todayStr, nameHistory, p.name)));
                 }
 
-                const assignedPenIds = activeAssignments.map(a => a.pen_id);
+                // Calculate Birds in Care (J6):
+                // For Admin/Manager: Total Farm Count on latest census date
+                // For Staff: Worker's own census count on latest census date
                 const censusCounts = data.census_counts || [];
-                const latestDate = censusCounts.length > 0
-                  ? [...censusCounts].map(c => c.date).sort((a, b) => new Date(b) - new Date(a))[0]
+                const validCensusDates = censusCounts
+                  .filter(c => c.date && c.date <= todayStr)
+                  .map(c => c.date);
+                const latestDate = validCensusDates.length > 0
+                  ? [...new Set(validCensusDates)].sort((a, b) => new Date(b) - new Date(a))[0]
                   : null;
-                const birdCount = assignedPenIds.reduce((sum, penId) => {
-                  const pCounts = censusCounts.filter(c => c.pen_id === penId && c.date === latestDate);
-                  return sum + pCounts.reduce((s, c) => s + (Number(c.bird_count) || 0), 0);
-                }, 0);
+
+                const isAdminOrManager = w.role === 'admin' || w.role === 'manager';
+                const totalFarmBirds = latestDate
+                  ? censusCounts.filter(c => c.date === latestDate).reduce((sum, c) => sum + (Number(c.bird_count) || 0), 0)
+                  : null;
+
+                const workerCensusRows = latestDate
+                  ? censusCounts.filter(c => c.worker_id === w.id && c.date === latestDate)
+                  : [];
+                const hasPersonalCensus = workerCensusRows.length > 0;
+                const personalBirds = hasPersonalCensus
+                  ? workerCensusRows.reduce((sum, c) => sum + (Number(c.bird_count) || 0), 0)
+                  : null;
 
                 // Active loan balance
                 const workerLoans = (data.loans || []).filter(l => l.worker_id === w.id);
@@ -304,7 +455,7 @@ export default function Workers() {
 
                 const getAssignmentDisplay = () => {
                   if (assignedPenNames.length > 0) return assignedPenNames.join(', ');
-                  if (w.status === 'inactive') return 'Departed';
+                  if (w.status === 'inactive') return 'Departed / Inactive';
                   if (w.role === 'admin') return 'General Operations';
                   if (w.role === 'manager') return 'Farm Management';
                   return 'Unassigned (Standby)';
@@ -321,8 +472,21 @@ export default function Workers() {
 
                     <div className="grid grid-cols-2 gap-2 pt-1 border-t border-border-farm/50 text-[11px]">
                       <div>
-                        <span className="text-[10px] text-text-muted block font-bold">Flock Headcount</span>
-                        <span className="font-mono font-bold text-dark-green">{birdCount.toLocaleString()} birds</span>
+                        <span className="text-[10px] text-text-muted block font-bold">Birds in Care</span>
+                        {isAdminOrManager ? (
+                          totalFarmBirds !== null ? (
+                            <div>
+                              <span className="font-mono font-bold text-dark-green">{totalFarmBirds.toLocaleString()}</span>
+                              <span className="text-[9px] text-text-muted ml-1">(Farm Total)</span>
+                            </div>
+                          ) : (
+                            <span className="text-[10.5px] text-text-muted italic">No census recorded</span>
+                          )
+                        ) : hasPersonalCensus ? (
+                          <span className="font-mono font-bold text-dark-green">{personalBirds.toLocaleString()} birds</span>
+                        ) : (
+                          <span className="text-[10.5px] text-text-muted italic">No census recorded</span>
+                        )}
                       </div>
                       <div className="text-right">
                         <span className="text-[10px] text-text-muted block font-bold">Advance Balance</span>
@@ -348,18 +512,33 @@ export default function Workers() {
 
               <div className="pt-3 border-t border-border-farm/50 flex justify-between items-center">
                 {!isCurrentUser ? (
-                  <button
-                    onClick={() => {
-                      setWorkerToDelete(w);
-                      setAdminAuthPassword('');
-                      setDeleteConfirmError('');
-                    }}
-                    className="text-red-accent hover:bg-red-50 p-1.5 rounded-lg border border-transparent hover:border-red-200 text-xs font-bold flex items-center gap-1 transition-all"
-                    title="Delete worker account"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>Delete</span>
-                  </button>
+                  hasWorkerHistory(w.id) ? (
+                    <button
+                      onClick={() => handleToggleActive(w)}
+                      className={`p-1.5 rounded-lg border text-xs font-bold flex items-center gap-1 transition-all ${
+                        w.status === 'inactive'
+                          ? 'text-primary hover:bg-emerald-50 border-emerald-200'
+                          : 'text-amber-700 hover:bg-amber-50 border-amber-200'
+                      }`}
+                      title={w.status === 'inactive' ? 'Reactivate worker account' : 'Deactivate worker (preserves history)'}
+                    >
+                      <ShieldAlert className="w-3.5 h-3.5" />
+                      <span>{w.status === 'inactive' ? 'Reactivate' : 'Deactivate'}</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        setWorkerToDelete(w);
+                        setAdminAuthPassword('');
+                        setDeleteConfirmError('');
+                      }}
+                      className="text-red-accent hover:bg-red-50 p-1.5 rounded-lg border border-transparent hover:border-red-200 text-xs font-bold flex items-center gap-1 transition-all"
+                      title="Delete worker account"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete</span>
+                    </button>
+                  )
                 ) : (
                   <span className="text-[10px] text-text-muted italic">Current User</span>
                 )}
@@ -369,6 +548,8 @@ export default function Workers() {
                     setEditingWorker(w);
                     setEditName(w.name);
                     setEditRole(w.role);
+                    setEditWorkerType(w.worker_type || 'farm_staff');
+                    setEditHasAppAccess(w.has_app_access !== false);
                     setEditSalary((w.base_salary || 0).toString());
                     setEditStatus(w.status || 'active');
                     setShowEditModal(true);
@@ -443,6 +624,33 @@ export default function Workers() {
                 </div>
                 <div>
                   <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                    Worker Type (F1)
+                  </label>
+                  <select
+                    value={invWorkerType}
+                    onChange={(e) => {
+                      const vt = e.target.value;
+                      setInvWorkerType(vt);
+                      if (vt === 'casual_group' || vt === 'security') {
+                        setInvHasAppAccess(false);
+                      } else {
+                        setInvHasAppAccess(true);
+                      }
+                    }}
+                    className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none font-bold text-text-primary"
+                  >
+                    <option value="farm_staff">🌾 Farm Staff</option>
+                    <option value="veterinary">🩺 Veterinary Doctor</option>
+                    <option value="security">🛡️ Security Guard</option>
+                    <option value="casual_group">👥 Casual Labour Group</option>
+                    <option value="admin_staff">💼 Admin Staff</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 items-center">
+                <div>
+                  <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
                     Monthly Salary (₦)
                   </label>
                   <input
@@ -454,6 +662,19 @@ export default function Workers() {
                     placeholder="45000"
                     className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none font-semibold font-mono"
                   />
+                </div>
+                <div className="pt-4">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={invHasAppAccess}
+                      onChange={(e) => setInvHasAppAccess(e.target.checked)}
+                      className="w-4 h-4 rounded text-primary focus:ring-primary"
+                    />
+                    <span className="text-xs font-bold text-text-primary">
+                      Allow Mobile/Web App Login
+                    </span>
+                  </label>
                 </div>
               </div>
 
@@ -558,6 +779,25 @@ export default function Workers() {
                   </div>
                   <div>
                     <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                      Worker Type (F1)
+                    </label>
+                    <select
+                      value={editWorkerType}
+                      onChange={(e) => setEditWorkerType(e.target.value)}
+                      className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none font-bold text-text-primary"
+                    >
+                      <option value="farm_staff">🌾 Farm Staff</option>
+                      <option value="veterinary">🩺 Veterinary Doctor</option>
+                      <option value="security">🛡️ Security Guard</option>
+                      <option value="casual_group">👥 Casual Labour Group</option>
+                      <option value="admin_staff">💼 Admin Staff</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
                       Base Salary (₦)
                     </label>
                     <input
@@ -569,21 +809,34 @@ export default function Workers() {
                       className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none font-semibold font-mono"
                     />
                   </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                      Account Status
+                    </label>
+                    <select
+                      value={editStatus}
+                      onChange={(e) => setEditStatus(e.target.value)}
+                      className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none font-bold text-text-primary"
+                    >
+                      <option value="active">Active</option>
+                      <option value="invited">Invited</option>
+                      <option value="inactive">Inactive (Departed / Deactivated)</option>
+                    </select>
+                  </div>
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
-                    Account Status
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={editHasAppAccess}
+                      onChange={(e) => setEditHasAppAccess(e.target.checked)}
+                      className="w-4 h-4 rounded text-primary focus:ring-primary"
+                    />
+                    <span className="text-xs font-bold text-text-primary">
+                      Allow Mobile/Web App Login & Operations Grid Access
+                    </span>
                   </label>
-                  <select
-                    value={editStatus}
-                    onChange={(e) => setEditStatus(e.target.value)}
-                    className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none font-bold text-text-primary"
-                  >
-                    <option value="active">Active</option>
-                    <option value="invited">Invited</option>
-                    <option value="inactive">Inactive (Departed / Deactivated)</option>
-                  </select>
                 </div>
 
                 <div className="flex justify-end pt-2">
@@ -894,6 +1147,194 @@ export default function Workers() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ─── MODAL 4: CASUAL WORKER ROSTER SUB-TABLE (F2) ─── */}
+      {showCasualModal && selectedCasualParent && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-2xl border border-border-farm shadow-2xl max-w-xl w-full overflow-hidden animate-scale-in max-h-[90vh] flex flex-col">
+            <div className="bg-dark-green p-4 text-white font-serif font-bold text-base flex justify-between items-center shrink-0">
+              <div className="flex items-center gap-2">
+                <Users className="w-5 h-5 text-accent" />
+                <span>Casual Labour Roster: {selectedCasualParent.name}</span>
+              </div>
+              <button 
+                onClick={() => {
+                  setShowCasualModal(false);
+                  setSelectedCasualParent(null);
+                }}
+                className="text-white/60 hover:text-white font-sans text-lg"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto space-y-5 font-sans text-xs scrollbar-thin">
+              <p className="text-text-muted text-xs">
+                Manage individuals in this casual labour group. Their combined earnings automatically update the group's total payroll salary.
+              </p>
+
+              {/* Add Casual Entry Form */}
+              <form onSubmit={handleAddCasualEntry} className="bg-bg-farm p-4 rounded-xl border border-border-farm space-y-3">
+                <div className="font-bold text-dark-green text-xs flex items-center gap-1.5">
+                  <Plus className="w-4 h-4 text-primary" />
+                  <span>Add Individual Casual Worker</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[9px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                      Worker Name
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={casualName}
+                      onChange={(e) => setCasualName(e.target.value)}
+                      placeholder="e.g. Ibrahim Musa"
+                      className="w-full bg-white border border-border-farm rounded-lg px-2.5 py-1.5 text-xs focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[9px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                      Role / Activity
+                    </label>
+                    <input
+                      type="text"
+                      value={casualRoleDesc}
+                      onChange={(e) => setCasualRoleDesc(e.target.value)}
+                      placeholder="e.g. Manure packing, Feed offloading"
+                      className="w-full bg-white border border-border-farm rounded-lg px-2.5 py-1.5 text-xs focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-3 items-end">
+                  <div>
+                    <label className="block text-[9px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                      Daily Rate (₦)
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min="0"
+                      value={casualRate}
+                      onChange={(e) => setCasualRate(e.target.value)}
+                      placeholder="2500"
+                      className="w-full bg-white border border-border-farm rounded-lg px-2.5 py-1.5 text-xs font-mono font-bold focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[9px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                      Days Worked
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min="1"
+                      step="0.5"
+                      value={casualDays}
+                      onChange={(e) => setCasualDays(e.target.value)}
+                      placeholder="5"
+                      className="w-full bg-white border border-border-farm rounded-lg px-2.5 py-1.5 text-xs font-mono font-bold focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <button
+                      type="submit"
+                      disabled={casualSubmitting}
+                      className="w-full bg-primary hover:bg-dark-green text-white font-bold py-1.5 px-3 rounded-lg text-xs transition-colors shadow-sm disabled:opacity-50"
+                    >
+                      {casualSubmitting ? 'Adding...' : '+ Add Entry'}
+                    </button>
+                  </div>
+                </div>
+              </form>
+
+              {/* Roster Table */}
+              <div className="overflow-x-auto rounded-xl border border-border-farm">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-bg-farm border-b border-border-farm text-[10px] uppercase font-bold text-text-muted">
+                      <th className="p-3">Worker Name</th>
+                      <th className="p-3">Role</th>
+                      <th className="p-3 text-right">Rate</th>
+                      <th className="p-3 text-center">Days</th>
+                      <th className="p-3 text-right">Total (₦)</th>
+                      <th className="p-3 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border-farm/50">
+                    {(() => {
+                      const entries = (data.casual_worker_entries || []).filter(c => c.parent_worker_id === selectedCasualParent.id);
+                      const totalGroupSalary = entries.reduce((sum, c) => sum + (Number(c.daily_rate || 0) * Number(c.days_worked || 0)), 0);
+
+                      if (entries.length === 0) {
+                        return (
+                          <tr>
+                            <td colSpan={6} className="p-6 text-center text-text-muted text-xs">
+                              No casual workers registered in this group yet. Use the form above to add members.
+                            </td>
+                          </tr>
+                        );
+                      }
+
+                      return (
+                        <>
+                          {entries.map(entry => {
+                            const pay = Number(entry.daily_rate || 0) * Number(entry.days_worked || 0);
+                            return (
+                              <tr key={entry.id} className="hover:bg-bg-farm/40 transition-colors">
+                                <td className="p-3 font-bold text-dark-green">{entry.worker_name}</td>
+                                <td className="p-3 text-text-muted">{entry.role_description || 'Casual'}</td>
+                                <td className="p-3 text-right font-mono">₦{Number(entry.daily_rate || 0).toLocaleString()}</td>
+                                <td className="p-3 text-center font-mono font-bold">{entry.days_worked}</td>
+                                <td className="p-3 text-right font-mono font-bold text-dark-green">
+                                  ₦{pay.toLocaleString()}
+                                </td>
+                                <td className="p-3 text-right">
+                                  <button
+                                    onClick={() => handleDeleteCasualEntry(entry.id)}
+                                    className="text-red-500 hover:text-red-700 p-1"
+                                    title="Delete entry"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          <tr className="bg-emerald-50/50 font-bold border-t border-emerald-200">
+                            <td colSpan={4} className="p-3 text-dark-green font-serif">
+                              Group Total Salary (Auto-Synced to Payroll):
+                            </td>
+                            <td className="p-3 text-right font-mono text-dark-green text-sm">
+                              ₦{totalGroupSalary.toLocaleString()}
+                            </td>
+                            <td></td>
+                          </tr>
+                        </>
+                      );
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="p-4 bg-bg-farm border-t border-border-farm flex justify-end shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCasualModal(false);
+                  setSelectedCasualParent(null);
+                }}
+                className="px-4 py-2 bg-white border border-border-farm hover:bg-bg-farm rounded-lg font-bold text-xs"
+              >
+                Done
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -20,22 +20,16 @@ export default function Dashboard() {
   const { data, ensureDateLoaded } = useData();
   const { role } = useAuth();
   
-  // Date state - defaults to the latest date available in logs, or today if empty
-  const getLatestLogDate = () => {
-    const dates = [
-      ...(data.production_log || []).map(p => p.date),
-      ...(data.sales_log || []).map(s => s.date),
-      ...(data.expenses_log || []).map(e => e.date),
-    ].filter(Boolean);
-    
-    if (dates.length > 0) {
-      // Sort descending and get first
-      return dates.sort((a, b) => new Date(b) - new Date(a))[0];
-    }
-    return new Date().toISOString().split('T')[0];
-  };
+  // B1: Always init to today — never persisted / cached stale date
+  const todayIso = (() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  })();
 
-  const [selectedDate, setSelectedDate] = useState(getLatestLogDate());
+  const [selectedDate, setSelectedDate] = useState(todayIso);
 
   // On-demand historical data loading: fetch requested month if not cached
   useEffect(() => {
@@ -159,7 +153,7 @@ export default function Dashboard() {
     }, 0);
   };
 
-  // 6. Admin Only Metrics: Revenue, Expenses, Profit, Worker Loans
+  // 6. Admin Only Metrics: Revenue, Expenses, Margin, Profit, Worker Loans
   const getTodayRevenue = () => {
     // Sum all payments collected today
     return (data.sales_log || [])
@@ -170,6 +164,17 @@ export default function Dashboard() {
                     (Number(s.deposit_amount) || 0);
         return sum + amt;
       }, 0);
+  };
+
+  const getTodayFeedCost = () => {
+    // Feed cost = total feed bags used today × cost per bag
+    const logs = (data.production_log || []).filter(l => l.date === selectedDate);
+    const totalBags = logs.reduce((s, l) => s + (Number(l.total_feed) || 0), 0);
+    const priceSettings = [...(data.egg_price_settings || [])]
+      .sort((a, b) => new Date(b.effective_date) - new Date(a.effective_date));
+    const rec = priceSettings.find(p => p.effective_date <= selectedDate);
+    const feedCostPerBag = Number(rec?.feed_cost_per_bag) || 3500;
+    return totalBags * feedCostPerBag;
   };
 
   const getTodayExpenses = () => {
@@ -228,63 +233,81 @@ export default function Dashboard() {
       .sort((a, b) => new Date(b) - new Date(a));
     const targetCensusDate = validCensusDates[0] || selectedDate;
 
-    return pens.map(pen => {
-      // Resolve primary display name on selectedDate
-      const displayName = resolvePenDisplayName(pen.id, selectedDate, nameHistory, pen.name);
+    return pens
+      .map(pen => {
+        // Resolve primary display name on selectedDate
+        const displayName = resolvePenDisplayName(pen.id, selectedDate, nameHistory, pen.name);
 
-      // Resolve workers assigned to this pen on selectedDate
-      const penAssignments = workerHistory.filter(a =>
-        a.pen_id === pen.id &&
-        a.start_date <= selectedDate &&
-        (!a.end_date || a.end_date >= selectedDate)
-      );
+        // Resolve workers assigned to this pen on selectedDate
+        const penAssignments = workerHistory.filter(a =>
+          a.pen_id === pen.id &&
+          a.start_date <= selectedDate &&
+          (!a.end_date || a.end_date >= selectedDate) &&
+          a.worker_id &&
+          a.worker_id !== 'unassigned'
+        );
 
-      const assignedWorkerNames = penAssignments
-        .map(a => workers.find(w => w.id === a.worker_id)?.name)
-        .filter(Boolean);
+        const assignedWorkerNames = penAssignments
+          .map(a => workers.find(w => w.id === a.worker_id)?.name)
+          .filter(Boolean);
 
-      const workerTeam = assignedWorkerNames.length > 0
-        ? assignedWorkerNames.join(', ')
-        : (workers.find(w => w.id === pen.worker_id)?.name || 'Unassigned');
+        // Fallback: if no history assignments exist across the whole farm on this date, fallback to active pen.worker_id
+        const anyFarmAssignments = workerHistory.some(a =>
+          a.start_date <= selectedDate &&
+          (!a.end_date || a.end_date >= selectedDate) &&
+          a.worker_id
+        );
 
-      // Bird count from latest census
-      const penCounts = census.filter(c => c.pen_id === pen.id && c.date === targetCensusDate);
-      const totalBirds = penCounts.reduce((sum, c) => sum + (c.bird_count || 0), 0);
+        const hasAssignedWorker = assignedWorkerNames.length > 0 || (!anyFarmAssignments && pen.worker_id && workers.some(w => w.id === pen.worker_id));
 
-      // Production for selected date (aggregate across all workers in this pen)
-      const penLogs = prodLogs.filter(l => l.pen_id === pen.id && l.date === selectedDate);
-      const morningEggs = penLogs.reduce((s, l) => s + (Number(l.morning_eggs) || 0), 0);
-      const eveningEggs = penLogs.reduce((s, l) => s + (Number(l.evening_eggs) || 0), 0);
-      const totalEggs   = morningEggs + eveningEggs;
-      const morningFeed = penLogs.reduce((s, l) => s + (Number(l.morning_feed) || 0), 0);
-      const eveningFeed = penLogs.reduce((s, l) => s + (Number(l.evening_feed) || 0), 0);
-      const totalFeedBags = morningFeed + eveningFeed;   // stored & displayed in bags (1 bag = 25 kg)
-      const mortality   = penLogs.reduce((s, l) => s + (Number(l.mortality) || 0), 0);
+        // Filter out pens that had no worker assigned on this date
+        if (!hasAssignedWorker) {
+          return null;
+        }
 
-      // P&L calculation — feed already stored in bags, so no ÷25 needed
-      const revenue  = (totalEggs / 30) * pricePerCrate;  // eggs → crates × price
-      const feedCost = totalFeedBags * feedCostPerBag;     // bags × ₦/bag
-      const netPnl   = revenue - feedCost;
-      const hasData  = penLogs.length > 0;
+        const workerTeam = assignedWorkerNames.length > 0
+          ? assignedWorkerNames.join(', ')
+          : (workers.find(w => w.id === pen.worker_id)?.name || 'Unassigned');
 
-      return {
-        id: pen.id,
-        name: displayName,
-        physicalLabel: pen.name,
-        generation: pen.generation,
-        workerName: workerTeam,
-        birdCount: totalBirds,
-        totalEggs,
-        totalFeedBags,
-        mortality,
-        revenue,
-        feedCost,
-        netPnl,
-        hasData,
-        pricePerCrate,
-        feedCostPerBag
-      };
-    });
+        // Bird count from latest census
+        const penCounts = census.filter(c => c.pen_id === pen.id && c.date === targetCensusDate);
+        const totalBirds = penCounts.reduce((sum, c) => sum + (c.bird_count || 0), 0);
+
+        // Production for selected date (aggregate across all workers in this pen)
+        const penLogs = prodLogs.filter(l => l.pen_id === pen.id && l.date === selectedDate);
+        const morningEggs = penLogs.reduce((s, l) => s + (Number(l.morning_eggs) || 0), 0);
+        const eveningEggs = penLogs.reduce((s, l) => s + (Number(l.evening_eggs) || 0), 0);
+        const totalEggs   = morningEggs + eveningEggs;
+        const morningFeed = penLogs.reduce((s, l) => s + (Number(l.morning_feed) || 0), 0);
+        const eveningFeed = penLogs.reduce((s, l) => s + (Number(l.evening_feed) || 0), 0);
+        const totalFeedBags = morningFeed + eveningFeed;   // stored & displayed in bags (1 bag = 25 kg)
+        const mortality   = penLogs.reduce((s, l) => s + (Number(l.mortality) || 0), 0);
+
+        // P&L calculation — egg quantities are recorded in crates, so no ÷30
+        const revenue  = totalEggs * pricePerCrate;
+        const feedCost = totalFeedBags * feedCostPerBag;     // bags × ₦/bag
+        const netPnl   = revenue - feedCost;
+        const hasData  = penLogs.length > 0;
+
+        return {
+          id: pen.id,
+          name: displayName,
+          physicalLabel: pen.name,
+          generation: pen.generation,
+          workerName: workerTeam,
+          birdCount: totalBirds,
+          totalEggs,
+          totalFeedBags,
+          mortality,
+          revenue,
+          feedCost,
+          netPnl,
+          hasData,
+          pricePerCrate,
+          feedCostPerBag
+        };
+      })
+      .filter(Boolean);
   };
 
   const eggStats = getEggProductionStats();
@@ -337,8 +360,10 @@ export default function Dashboard() {
         {/* Today's Egg Production */}
         <div className="bg-white border border-border-farm rounded-2xl p-5 shadow-sm flex items-start justify-between">
           <div className="space-y-1">
-            <span className="text-xs text-text-muted font-bold uppercase tracking-wider">Today's Egg Output</span>
-            <div className="text-3xl font-serif font-black text-dark-green">{eggStats.today.toLocaleString()}</div>
+            <span className="text-xs text-text-muted font-bold uppercase tracking-wider">Today's Egg Production</span>
+            <div className="text-3xl font-serif font-black text-dark-green">
+              {eggStats.today.toLocaleString()} <span className="text-xs font-sans font-normal text-text-muted">crates</span>
+            </div>
             <div className="flex items-center gap-1 text-[10px] font-bold">
               {eggStats.trend === 'up' && (
                 <span className="text-primary flex items-center gap-0.5 bg-green-50 px-1.5 py-0.5 rounded border border-green-150">
@@ -388,21 +413,27 @@ export default function Dashboard() {
                 <div className="text-2xl font-serif font-black text-primary">₦{getTodayRevenue().toLocaleString()}</div>
                 <p className="text-[10px] text-text-muted font-sans">Payments received today</p>
               </div>
-              
+
               <div className="border-r border-border-farm/60 pr-4 space-y-1.5">
-                <span className="text-[10px] text-text-muted font-bold uppercase tracking-widest">Today's Expenses</span>
-                <div className="text-2xl font-serif font-black text-red-accent">₦{getTodayExpenses().toLocaleString()}</div>
-                <p className="text-[10px] text-text-muted font-sans">Purchases &amp; costs today</p>
-              </div>
-              
-              <div className="border-r border-border-farm/60 pr-4 space-y-1.5">
-                <span className="text-[10px] text-text-muted font-bold uppercase tracking-widest">Net Profit</span>
-                <div className="text-2xl font-serif font-black text-dark-green">
-                  ₦{(getTodayRevenue() - getTodayExpenses()).toLocaleString()}
+                <span className="text-[10px] text-text-muted font-bold uppercase tracking-widest">Margin over Feed</span>
+                <div className={`text-2xl font-serif font-black ${
+                  (getTodayRevenue() - getTodayFeedCost()) >= 0 ? 'text-dark-green' : 'text-red-accent'
+                }`}>
+                  {(getTodayRevenue() - getTodayFeedCost()) >= 0 ? '+' : ''}₦{(getTodayRevenue() - getTodayFeedCost()).toLocaleString()}
                 </div>
-                <p className="text-[10px] text-text-muted font-sans">Net margin for today</p>
+                <p className="text-[10px] text-text-muted font-sans">Revenue minus feed cost only</p>
               </div>
-              
+
+              <div className="border-r border-border-farm/60 pr-4 space-y-1.5">
+                <span className="text-[10px] text-text-muted font-bold uppercase tracking-widest">Net Profit (all costs)</span>
+                <div className={`text-2xl font-serif font-black ${
+                  (getTodayRevenue() - getTodayExpenses()) >= 0 ? 'text-dark-green' : 'text-red-accent'
+                }`}>
+                  {(getTodayRevenue() - getTodayExpenses()) >= 0 ? '+' : ''}₦{(getTodayRevenue() - getTodayExpenses()).toLocaleString()}
+                </div>
+                <p className="text-[10px] text-text-muted font-sans">Revenue minus all expenses today</p>
+              </div>
+
               <div className="space-y-1.5">
                 <span className="text-[10px] text-text-muted font-bold uppercase tracking-widest">Outstanding Worker Loans</span>
                 <div className="text-2xl font-serif font-black text-amber-accent">₦{getOutstandingWorkerLoans().toLocaleString()}</div>
@@ -542,17 +573,17 @@ export default function Dashboard() {
           {(() => {
             const totalRevenue  = flockSummary.reduce((s, p) => s + p.revenue,  0);
             const totalFeedCost = flockSummary.reduce((s, p) => s + p.feedCost, 0);
-            const farmNetPnl    = totalRevenue - totalFeedCost;
+            const farmMargin    = totalRevenue - totalFeedCost;
             const hasAnyData    = flockSummary.some(p => p.hasData);
             if (!hasAnyData) return null;
             return (
               <div className={`flex items-center gap-3 px-3 py-1.5 rounded-xl border text-xs font-bold ${
-                farmNetPnl >= 0
+                farmMargin >= 0
                   ? 'bg-emerald-50 border-emerald-200 text-dark-green'
                   : 'bg-red-50 border-red-200 text-red-700'
               }`}>
-                <span className="text-text-muted font-normal">Farm Day Total:</span>
-                <span>{farmNetPnl >= 0 ? '+' : ''}₦{farmNetPnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                <span className="text-text-muted font-normal">Farm Margin over Feed:</span>
+                <span>{farmMargin >= 0 ? '+' : ''}₦{farmMargin.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
                 <span className="text-text-muted font-normal">Revenue: ₦{totalRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
               </div>
             );
@@ -594,8 +625,8 @@ export default function Dashboard() {
                 {hasData ? (
                   <div className="space-y-1.5 text-[11px]">
                     <div className="flex justify-between">
-                      <span className="text-text-muted">🥚 Eggs</span>
-                      <span className="font-bold text-text-primary">{flock.totalEggs.toLocaleString()} eggs</span>
+                      <span className="text-text-muted">🥚 Crates</span>
+                      <span className="font-bold text-text-primary">{flock.totalEggs.toLocaleString()} crates</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-text-muted">🌽 Feed</span>
@@ -622,7 +653,7 @@ export default function Dashboard() {
                 }`}>
                   <div className="flex items-center justify-between">
                     <span className="text-[9px] font-bold uppercase tracking-wider text-text-muted">
-                      {hasData ? (profit ? '📈 Profit' : '📉 Loss') : 'Birds'}
+                      {hasData ? (profit ? '📈 Margin' : '📉 Loss') : 'Birds'}
                     </span>
                     <span className={`text-sm font-serif font-black ${
                       !hasData
