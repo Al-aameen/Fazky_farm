@@ -18,10 +18,16 @@ import {
   Layers, 
   HeartPulse 
 } from 'lucide-react';
+import AdminExecutiveDashboard from '../components/AdminExecutiveDashboard';
 
 export default function WorkerDashboard({ setActivePage }) {
   const { user, worker, role } = useAuth();
   const { data, insertRecord, ensureDateLoaded } = useData();
+
+  // If user is Admin, render the Executive Command Center
+  if (role === 'admin') {
+    return <AdminExecutiveDashboard setActivePage={setActivePage} />;
+  }
 
   const todayStr = new Date().toISOString().split('T')[0];
 

@@ -36,7 +36,8 @@ export const TABLE_NAMES = [
   'general_livestock_detailed',
   'worker_permissions',
   'worker_module_permissions',
-  'casual_worker_entries'
+  'casual_worker_entries',
+  'staff_attendance_roster'
 ];
 
 // Tier 1: Small reference tables needed everywhere — loaded once and kept in memory
@@ -52,13 +53,14 @@ export const GLOBAL_TABLES = [
   'vaccination_schedules',
   'feed_inventory',
   'worker_permissions',
-  'worker_module_permissions'
+  'worker_module_permissions',
+  'staff_attendance_roster'
 ];
 
 // Tier 2: Page-specific mapping — only fetch what the active page needs
 export const PAGE_TABLES_MAP = {
-  dashboard:        ['production_log', 'sales_log', 'expenses_log', 'census_counts', 'general_census', 'pen_worker_history', 'pen_name_history'],
-  workerdashboard:  ['production_log', 'census_counts', 'vaccination_schedules', 'loan_requests', 'feed_inventory', 'pen_worker_history', 'pen_name_history'],
+  dashboard:        ['production_log', 'sales_log', 'expenses_log', 'census_counts', 'general_census', 'pen_worker_history', 'pen_name_history', 'staff_attendance_roster', 'off_pays', 'feed_inventory', 'batches', 'farm_projects', 'general_livestock_detailed'],
+  workerdashboard:  ['production_log', 'census_counts', 'vaccination_schedules', 'loan_requests', 'feed_inventory', 'pen_worker_history', 'pen_name_history', 'staff_attendance_roster', 'off_pays', 'batches', 'farm_projects', 'sales_log', 'expenses_log', 'general_livestock_detailed'],
   census:           ['census_counts', 'general_census', 'pen_worker_history', 'pen_name_history'],
   production:       ['production_log', 'pen_worker_history', 'pen_name_history'],
   flockhealth:      ['production_log', 'census_counts', 'flock_health_log', 'batches', 'pen_worker_history', 'pen_name_history'],
@@ -70,8 +72,8 @@ export const PAGE_TABLES_MAP = {
   farmprojects:     ['farm_projects', 'expenses_log'],
   procurement:      ['maize_records', 'feed_production', 'feed_inventory', 'feed_inventory_log', 'expenses_log'],
   loans:            ['loans', 'loan_repayments', 'loan_requests'],
-  payroll:          ['loans', 'loan_repayments', 'off_pays'],
-  workers:          ['workers', 'pens', 'pen_worker_history', 'pen_name_history', 'census_counts', 'loans', 'loan_repayments'],
+  payroll:          ['loans', 'loan_repayments', 'off_pays', 'staff_attendance_roster'],
+  workers:          ['workers', 'pens', 'pen_worker_history', 'pen_name_history', 'census_counts', 'loans', 'loan_repayments', 'staff_attendance_roster'],
   generallivestock: ['general_livestock_detailed', 'general_census'],
   settings:         ['workers', 'egg_price_settings', 'worker_permissions', 'pen_name_history', 'worker_name_aliases']
 };

@@ -44,9 +44,14 @@ export default function Payroll() {
   // Helper: Get off-pay bonuses for a worker in the selected month
   const getWorkerBonuses = (workerId) => {
     const list = (data.off_pays || []).filter(o => o.worker_id === workerId && o.date.substring(0, 7) === selectedMonth);
-    const sum = list.reduce((total, item) => total + (Number(item.amount) || 0), 0);
+    // Only sum bonuses that are designated for payroll (exclude immediate cash/transfer daily expenses)
+    const accruedBonuses = list.filter(o => o.payment_mode !== 'immediate');
+    const immediateBonuses = list.filter(o => o.payment_mode === 'immediate');
+    const sum = accruedBonuses.reduce((total, item) => total + (Number(item.amount) || 0), 0);
     return {
       list,
+      accruedBonuses,
+      immediateBonuses,
       sum
     };
   };

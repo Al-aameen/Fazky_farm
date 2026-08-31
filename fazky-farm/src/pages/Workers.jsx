@@ -34,6 +34,7 @@ export default function Workers() {
   const [invRole, setInvRole] = useState('staff');
   const [invWorkerType, setInvWorkerType] = useState('farm_staff');
   const [invHasAppAccess, setInvHasAppAccess] = useState(true);
+  const [invOffDay, setInvOffDay] = useState('Sunday');
   const [invSalary, setInvSalary] = useState('');
   const [invPassword, setInvPassword] = useState('');
   const [showInvPass, setShowInvPass] = useState(false);
@@ -45,6 +46,7 @@ export default function Workers() {
   const [editRole, setEditRole] = useState('staff');
   const [editWorkerType, setEditWorkerType] = useState('farm_staff');
   const [editHasAppAccess, setEditHasAppAccess] = useState(true);
+  const [editOffDay, setEditOffDay] = useState('Sunday');
   const [editSalary, setEditSalary] = useState('');
   const [editStatus, setEditStatus] = useState('active');
 
@@ -101,6 +103,7 @@ export default function Workers() {
           role: invRole,
           worker_type: invWorkerType,
           has_app_access: invHasAppAccess,
+          off_day: invOffDay,
           base_salary: salary,
           status: invPassword ? 'active' : 'invited'
         });
@@ -116,6 +119,7 @@ export default function Workers() {
       setInvRole('staff');
       setInvWorkerType('farm_staff');
       setInvHasAppAccess(true);
+      setInvOffDay('Sunday');
       setInvSalary('');
       setInvPassword('');
       setTimeout(() => setMessage(''), 5000);
@@ -141,6 +145,7 @@ export default function Workers() {
         role: editRole,
         worker_type: editWorkerType,
         has_app_access: editHasAppAccess,
+        off_day: editOffDay,
         base_salary: salary,
         status: editStatus
       });
@@ -470,6 +475,13 @@ export default function Workers() {
                       </span>
                     </div>
 
+                    <div className="flex justify-between items-center text-[11px] pt-1 border-t border-border-farm/50">
+                      <span className="text-text-muted font-bold">Fixed Off-Day:</span>
+                      <span className="font-bold text-amber-800 bg-amber-100/70 px-2 py-0.5 rounded-md text-[10px]">
+                        {w.off_day || 'Sunday'}
+                      </span>
+                    </div>
+
                     <div className="grid grid-cols-2 gap-2 pt-1 border-t border-border-farm/50 text-[11px]">
                       <div>
                         <span className="text-[10px] text-text-muted block font-bold">Birds in Care</span>
@@ -550,14 +562,16 @@ export default function Workers() {
                     setEditRole(w.role);
                     setEditWorkerType(w.worker_type || 'farm_staff');
                     setEditHasAppAccess(w.has_app_access !== false);
+                    setEditOffDay(w.off_day || 'Sunday');
                     setEditSalary((w.base_salary || 0).toString());
                     setEditStatus(w.status || 'active');
                     setShowEditModal(true);
                   }}
-                  className="flex items-center gap-1 bg-bg-farm hover:bg-light-green border border-border-farm text-primary font-bold px-3 py-1.5 rounded-lg text-[10px] transition-all ml-auto"
+                  className="text-primary hover:text-dark-green p-1.5 rounded-lg border border-border-farm hover:bg-bg-farm text-xs font-bold flex items-center gap-1 transition-all"
+                  title="Edit worker settings"
                 >
-                  <Edit3 className="w-3 h-3" />
-                  Edit Profile
+                  <Edit3 className="w-3.5 h-3.5" />
+                  <span>Edit Profile</span>
                 </button>
               </div>
             </div>
@@ -663,19 +677,34 @@ export default function Workers() {
                     className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none font-semibold font-mono"
                   />
                 </div>
-                <div className="pt-4">
-                  <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={invHasAppAccess}
-                      onChange={(e) => setInvHasAppAccess(e.target.checked)}
-                      className="w-4 h-4 rounded text-primary focus:ring-primary"
-                    />
-                    <span className="text-xs font-bold text-text-primary">
-                      Allow Mobile/Web App Login
-                    </span>
+                <div>
+                  <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                    Fixed Off-Day *
                   </label>
+                  <select
+                    value={invOffDay}
+                    onChange={(e) => setInvOffDay(e.target.value)}
+                    className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-xs font-bold text-text-primary focus:outline-none"
+                  >
+                    {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map(d => (
+                      <option key={d} value={d}>{d}</option>
+                    ))}
+                  </select>
                 </div>
+              </div>
+
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={invHasAppAccess}
+                    onChange={(e) => setInvHasAppAccess(e.target.checked)}
+                    className="w-4 h-4 rounded text-primary focus:ring-primary"
+                  />
+                  <span className="text-xs font-bold text-text-primary">
+                    Allow Mobile/Web App Login
+                  </span>
+                </label>
               </div>
 
               {/* Initial Password Field */}
@@ -795,7 +824,7 @@ export default function Workers() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
                     <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
                       Base Salary (₦)
@@ -808,6 +837,20 @@ export default function Workers() {
                       onChange={(e) => setEditSalary(e.target.value)}
                       className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-sm focus:outline-none font-semibold font-mono"
                     />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
+                      Fixed Off-Day
+                    </label>
+                    <select
+                      value={editOffDay}
+                      onChange={(e) => setEditOffDay(e.target.value)}
+                      className="w-full bg-bg-farm border border-border-farm rounded-lg px-3 py-2 text-xs font-bold text-text-primary focus:outline-none"
+                    >
+                      {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map(d => (
+                        <option key={d} value={d}>{d}</option>
+                      ))}
+                    </select>
                   </div>
                   <div>
                     <label className="block text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1">
